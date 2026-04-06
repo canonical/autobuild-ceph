@@ -3,7 +3,7 @@
 set -eux
 
 sudo apt update
-sudo apt install devscripts git-buildpackage equivs python3-venv default-jdk javahelper dh-python
+sudo apt install -y devscripts git-buildpackage equivs python3-venv default-jdk javahelper dh-python
 
 # check out upstream repo and generate tarball
 git clone https://github.com/ceph/ceph
