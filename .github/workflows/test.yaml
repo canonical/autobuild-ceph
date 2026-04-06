@@ -1,12 +1,17 @@
 name: Build Ceph
 
 on:
+  workflow_call:
   workflow_dispatch:
+    inputs:
+      part:
+        required: false
+        default: ''
 
 jobs:
   build:
     name: Build Ceph in LXD container
-    runs-on: ubuntu-latest
+    runs-on: [ubuntu-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
