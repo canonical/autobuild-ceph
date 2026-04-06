@@ -1,0 +1,34 @@
+name: Build Ceph
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Ceph in LXD container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install and initialize LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -aG lxd $USER
+          newgrp lxd
+
+      - name: Launch Ubuntu Resolute container
+        run: |
+          lxd_cmd() { sudo -g lxd lxc "$@"; }
+          lxd_cmd launch ubuntu:resolute ceph-build
+          # Wait for the container to be ready
+          lxd_cmd exec ceph-build -- cloud-init status --wait
+
+      - name: Push build script to container
+        run: |
+          sudo -g lxd lxc file push build.sh ceph-build/root/build.sh
+
+      - name: Execute build script in container
+        run: |
+          sudo -g lxd lxc exec ceph-build -- bash /root/build.sh
