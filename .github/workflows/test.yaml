@@ -20,6 +20,7 @@ jobs:
         run: |
           sudo snap install lxd
           sudo lxd init --auto
+          sudo iptables -P FORWARD ACCEPT
           sudo usermod -aG lxd $USER
           newgrp lxd
 
