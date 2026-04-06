@@ -26,8 +26,7 @@ jobs:
       - name: Launch Ubuntu Resolute container
         run: |
           lxd_cmd() { sudo -g lxd lxc "$@"; }
-          lxd_cmd remote add --protocol simplestreams ubuntu-daily https://cloud-images.ubuntu.com/
-          lxd_cmd launch ubuntu:resolute ceph-build
+          lxd_cmd launch ubuntu-daily:resolute ceph-build
           # Wait for the container to be ready
           lxd_cmd exec ceph-build -- cloud-init status --wait
 
