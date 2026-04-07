@@ -33,4 +33,5 @@ git commit -m "add debian directory"
 
 sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
 sudo mk-build-deps -i -t "apt-get -o Debug::pkgProblemResolver=1 -y --no-install-recommends" debian/control
+rm *.buildinfo *.changes *.deb || true
 debuild --no-lintian -us -uc -d   # build the package
