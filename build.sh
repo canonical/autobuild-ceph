@@ -28,6 +28,7 @@ rm *.buildinfo || true
 git checkout upstream/20.2.0
 git checkout -b build
 git checkout origin/ubuntu/latest -- debian
+git rm debian/compat || true
 git commit -m "add debian directory"
 
 sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
