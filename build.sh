@@ -27,7 +27,7 @@ gbp import-orig --no-interactive --merge-mode=replace ../ceph-tarball.tar.bz2 -u
 rm *.buildinfo || true
 git checkout upstream/20.2.0
 git checkout -b build
-git checkout ubuntu/latest -- debian
+git checkout origin/ubuntu/latest -- debian
 git commit -m "add debian directory"
 
 sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
