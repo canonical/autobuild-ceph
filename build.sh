@@ -10,7 +10,7 @@ git clone https://github.com/ceph/ceph
 cd ceph && ./make-dist && cd ..
 
 mv ceph/ceph*.bz2 ceph-tarball.tar.bz2
-rmdir ceph
+rm -rf ceph
 
 # check out launchpad repo
 git clone git://git.launchpad.net/~lmlogiudice/ubuntu/+source/ceph
