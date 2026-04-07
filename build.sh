@@ -17,7 +17,7 @@ git clone git://git.launchpad.net/~lmlogiudice/ubuntu/+source/ceph
 cd ceph
 
 git remote add source git://git.launchpad.net/ubuntu/+source/ceph
-git checkout upstream && git clone pristine-tar
+git checkout upstream && git checkout pristine-tar
 git fetch source
 git checkout origin/ubuntu/resolute
 git checkout -b ubuntu/resolute || true
