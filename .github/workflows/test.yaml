@@ -4,17 +4,46 @@ on:
   workflow_call:
   workflow_dispatch:
     inputs:
-      part:
+      launchpad_owner:
+        description: Launchpad owner namespace for the ceph source repo
         required: false
-        default: ''
+        default: lmlogiudice
+  schedule:
+    - cron: '0 5 * * 1'  # Weekly on Mondays at 05:00 UTC
 
 jobs:
   build:
-    name: Build Ceph in LXD container
+    name: Build Ceph (${{ matrix.name }})
     runs-on: [ubuntu-latest]
+    env:
+      UBUNTU_BRANCH: ${{ matrix.ubuntu_branch }}
+      DEBIAN_REF: ${{ matrix.debian_ref }}
+      CEPH_VERSION: ${{ matrix.ceph_version }}
+      LAUNCHPAD_OWNER: ${{ github.event.inputs.launchpad_owner || 'lmlogiudice' }}
+      BASH_ENV: ${{ github.workspace }}/lxd.sh
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: resolute
+            lxd_image: ubuntu-daily:resolute
+            ubuntu_branch: ubuntu/resolute
+            debian_ref: origin/ubuntu/latest
+            ceph_version: 20.2.0
+          - name: noble
+            lxd_image: ubuntu:24.04
+            ubuntu_branch: ubuntu/noble
+            debian_ref: origin/ubuntu/noble
+            ceph_version: 19.2.3
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 10
+        with:
+          detached: true
 
       - name: Install and initialize LXD
         run: |
@@ -24,17 +53,26 @@ jobs:
           sudo usermod -aG lxd $USER
           newgrp lxd
 
-      - name: Launch Ubuntu Resolute container
+      - name: Launch Ubuntu container
         run: |
-          lxd_cmd() { sudo -g lxd lxc "$@"; }
-          lxd_cmd launch ubuntu-daily:resolute ceph-build
-          # Wait for the container to be ready
-          lxd_cmd exec ceph-build -- cloud-init status --wait
+          lxd_launch_and_wait ${{ matrix.lxd_image }} ceph-build
 
       - name: Push build script to container
         run: |
-          sudo -g lxd lxc file push build.sh ceph-build/root/build.sh
+          lxd_push_file build.sh ceph-build root/build.sh
 
-      - name: Execute build script in container
+      - name: Install dependencies
         run: |
-          sudo -g lxd lxc exec ceph-build -- bash /root/build.sh
+          lxd_exec_build_stage ceph-build 'set -eux; source /root/build.sh; cd /root; install_dependencies'
+
+      - name: Prepare tarball
+        run: |
+          lxd_exec_build_stage ceph-build 'set -eux; source /root/build.sh; cd /root; prepare_tarball'
+
+      - name: Install build requirements
+        run: |
+          lxd_exec_build_stage ceph-build 'set -eux; source /root/build.sh; cd /root/ceph; install_build_requirements'
+
+      - name: Build package
+        run: |
+          lxd_exec_build_stage ceph-build 'set -eux; source /root/build.sh; cd /root/ceph; build'
