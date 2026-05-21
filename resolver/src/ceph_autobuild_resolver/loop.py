@@ -30,10 +30,12 @@ log = logging.getLogger(__name__)
 # most recent _KEEP_RECENT_TURNS entries verbatim plus a summary of the rest.
 # Bounds per-call input tokens to O(n) rather than O(n²) over the loop.
 #
-# With a 128K-context model and ~2-4K tokens per message, we can hold 30+ turns
-# comfortably. The original values (24/10) compressed every ~5 model turns,
-# which is too aggressive for multi-file patch tasks where the model needs to
-# remember what it already changed across 20-30 turns.
+# Observed growth is ~500-800 tok/turn (reasoning is discarded from history,
+# only tool calls and text accumulate). The original values (24/10) compressed
+# every ~5 model turns, far too often for multi-file patch tasks. With 80/30:
+# context oscillates 17K-57K, compression fires every ~23 turns, and the model
+# retains 15 full turn-pairs of visible context after each compression.
+# Safe for MAX_ITERATIONS=1000: ~43 compressions total, never close to limits.
 _COMPRESS_AFTER_TURNS = 80
 _KEEP_RECENT_TURNS = 30
 
