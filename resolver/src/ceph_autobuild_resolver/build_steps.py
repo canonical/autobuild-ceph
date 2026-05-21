@@ -225,7 +225,7 @@ def build_stage(cfg: Config) -> Stage:
                 workdir=cfg.container_workdir,
             ),
             Step(
-                ["debuild", "--no-lintian", "-us", "-uc", "-d"],
+                ["debuild", "--no-lintian", "-us", "-uc", "-d", "-b"],
                 workdir=cfg.container_workdir,
             ),
         ],
