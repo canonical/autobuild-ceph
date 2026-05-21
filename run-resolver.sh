@@ -7,6 +7,6 @@ cd "$(dirname "$0")/resolver"
 exec uv run ceph-autobuild-resolver resolve \
   --container ceph-build \
   --pristine-snapshot pristine \
-  --matrix-name resolute \
+  --matrix-name "${MATRIX_NAME:-resolute}" \
   --dry-run-output \
   "$@"
