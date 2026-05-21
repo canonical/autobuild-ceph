@@ -29,8 +29,13 @@ log = logging.getLogger(__name__)
 # Compress history when it exceeds this many messages, retaining only the
 # most recent _KEEP_RECENT_TURNS entries verbatim plus a summary of the rest.
 # Bounds per-call input tokens to O(n) rather than O(n²) over the loop.
-_COMPRESS_AFTER_TURNS = 24
-_KEEP_RECENT_TURNS = 10
+#
+# With a 128K-context model and ~2-4K tokens per message, we can hold 30+ turns
+# comfortably. The original values (24/10) compressed every ~5 model turns,
+# which is too aggressive for multi-file patch tasks where the model needs to
+# remember what it already changed across 20-30 turns.
+_COMPRESS_AFTER_TURNS = 80
+_KEEP_RECENT_TURNS = 30
 
 
 def _summarize_turns(turns: list[Message]) -> str:
