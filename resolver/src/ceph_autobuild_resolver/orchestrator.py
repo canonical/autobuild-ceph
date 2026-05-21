@@ -556,10 +556,22 @@ def _drop_patch_in_container(
 
 
 def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
-    """Capture the model's accumulated changes as a unified diff against HEAD."""
-    result = lxd.exec_shell(
-        container,
-        f"cd {cfg.container_workdir} && git add -A && git diff --staged",
-        check=False,
+    """Capture the model's accumulated changes as a unified diff against HEAD.
+
+    Scope git-add to model-writable paths only (debian/patches/ + debian root
+    files).  git add -A would also stage debhelper build artifacts under
+    debian/<pkg>/ and quilt-created .orig files in upstream src/, both of which
+    make git apply --index fail during validation.
+    """
+    # Stage only the paths the model is allowed to change.  debhelper staging
+    # trees (debian/ceph-*/…) and quilt artefacts in src/ are intentionally
+    # excluded.
+    stage_cmd = (
+        f"cd {cfg.container_workdir} && "
+        "git reset HEAD -- . 2>/dev/null; "  # unstage any prior git add -A residue
+        "git add -- debian/patches/ debian/rules debian/control "
+        "debian/changelog debian/copyright debian/compat 2>/dev/null; "
+        "git diff --staged"
     )
+    result = lxd.exec_shell(container, stage_cmd, check=False)
     return result.stdout
