@@ -79,6 +79,26 @@ def assert_in_scope(path: str) -> None:
     )
 
 
+def assert_not_patch_file(path: str) -> None:
+    """Raise ``EditScopeViolation`` if ``path`` targets a .patch file under debian/patches/.
+
+    Patch files MUST be managed through replace_in_upstream (to create/append) and
+    drop_patch (to remove). Direct edits produce incorrect @@ line numbers and will
+    fail at dpkg-source time.  This guard is applied to edit_file, write_file, and
+    delete_file — but NOT to replace_in_upstream or drop_patch, which are the
+    authoritative patch managers.
+    """
+    p = normalize(path)
+    if p.startswith("debian/patches/") and p.endswith(".patch"):
+        name = p.rsplit("/", 1)[-1]
+        raise EditScopeViolation(
+            f"Direct edit of patch file {name!r} is not allowed. "
+            "Patch files must only be managed by replace_in_upstream (to add/update hunks) "
+            "or drop_patch (to remove the patch entirely). "
+            "Direct edits produce incorrect @@ line numbers and break the build."
+        )
+
+
 def evaluate_flags(
     path: str,
     *,

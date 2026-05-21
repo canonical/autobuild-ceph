@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ceph_autobuild_resolver.build_runner import BuildRunner
+from ceph_autobuild_resolver import guards
 from ceph_autobuild_resolver.tools.filesystem import (
     FilesystemHandlers,
     _diff_target_paths,
@@ -65,10 +66,16 @@ def test_write_file_rejects_upstream_path(fs):
 
 
 def test_write_file_succeeds_under_debian(fake_lxd, fs):
-    out = fs.write_file("debian/patches/new.patch", "content")
+    # Non-patch debian files are allowed.
+    out = fs.write_file("debian/rules", "content")
     assert out["ok"] is True
-    written = (Path(fake_lxd.root) / "root/ceph/debian/patches/new.patch").read_text()
+    written = (Path(fake_lxd.root) / "root/ceph/debian/rules").read_text()
     assert written == "content"
+
+
+def test_write_file_blocks_patch_files(fake_lxd, fs):
+    with pytest.raises(guards.EditScopeViolation):
+        fs.write_file("debian/patches/new.patch", "content")
 
 
 def test_write_file_flags_series_removal(fake_lxd, fs):

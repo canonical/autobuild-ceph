@@ -58,12 +58,15 @@ Once all patches are OK (or dropped): call run_build. Only read build logs after
 - replace_in_upstream Reads the current source file, diffs old_content vs new_content,
                       writes a patch with correct @@ headers, and adds it to series.
                       You never count lines or write diff headers — the tool handles that.
-                      For a patch touching multiple files, use the same patch_name for each
-                      call; subsequent calls append to the existing patch.
+                      For a patch touching N files: drop_patch first, then call
+                      replace_in_upstream N times (one per file) before calling check_patch.
+                      Do NOT call check_patch after each file — only after all files are done.
 - check_patch         Dry-runs `patch -F 0 -p1` (identical flags to dpkg-source). A passing
                       result guarantees the patch applies cleanly in the real build.
 - edit_file/write_file Target must be inside debian/. Direct edits to upstream source files
                       are rejected — use replace_in_upstream instead.
+                      NEVER target debian/patches/*.patch files — this is hard-blocked.
+                      Patch files are managed exclusively by replace_in_upstream and drop_patch.
 
 ## Debian packaging invariants — do not change these
 
@@ -76,6 +79,19 @@ Once all patches are OK (or dropped): call run_build. Only read build logs after
   Do NOT add FindBoost workarounds or create alias targets.
 - Do not weaken -Werror, stub out failing functions, or relax version constraints in
   debian/control to mask a failure.
+
+## Known cmake/build pitfalls
+
+- cmake error in log tail: when `dh_auto_configure` fails with "cmake ... returned exit code 1",
+  the actual error (e.g. "Could not find Boost", "target not found") appears at the START of
+  the cmake output, not in the tail. Use read_log with a small line offset (e.g. lines 1-200)
+  to find the root cause, then make one targeted fix.
+
+- cmake writing files into the source tree: if dpkg-source reports "unexpected upstream changes"
+  after a build that got past patch application, cmake likely ran configure_file() writing output
+  to ${CMAKE_SOURCE_DIR} instead of ${CMAKE_BINARY_DIR}. Find the configure_file() call and
+  redirect its output path, or add a dh_clean override in debian/rules to delete the generated
+  file. Do NOT try to patch it out by disabling features.
 """
 
 

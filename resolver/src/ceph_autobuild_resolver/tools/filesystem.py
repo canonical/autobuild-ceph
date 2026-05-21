@@ -173,6 +173,7 @@ class FilesystemHandlers:
 
     def write_file(self, path: str, content: str) -> dict[str, Any]:
         guards.assert_in_scope(path)
+        guards.assert_not_patch_file(path)
         rel = guards.normalize(path)
         full = f"{self.cfg.container_workdir}/{rel}"
 
@@ -188,6 +189,7 @@ class FilesystemHandlers:
         self, path: str, old_str: str, new_str: str
     ) -> dict[str, Any]:
         guards.assert_in_scope(path)
+        guards.assert_not_patch_file(path)
         rel = guards.normalize(path)
         full = f"{self.cfg.container_workdir}/{rel}"
 
@@ -224,6 +226,7 @@ class FilesystemHandlers:
 
     def delete_file(self, path: str) -> dict[str, Any]:
         guards.assert_in_scope(path)
+        guards.assert_not_patch_file(path)
         rel = guards.normalize(path)
         full = f"{self.cfg.container_workdir}/{rel}"
         old = self._read_full_if_exists(full)
