@@ -1,0 +1,164 @@
+"""Build stage execution inside an LXD container.
+
+Each public method builds the appropriate ``Stage`` from ``build_steps`` and
+delegates to ``_run_stage``, which iterates through the steps, accumulates
+output, and writes a per-stage log file after every step.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+
+from . import display
+from .build_steps import (
+    Stage,
+    build_stage,
+    install_build_requirements_stage,
+    install_dependencies_stage,
+    prepare_tarball_stage,
+)
+from .config import Config
+from .lxd import ExecResult, LXDManager
+
+log = logging.getLogger(__name__)
+
+_LOG_TAIL_LINES = 500
+_ERROR_CONTEXT_BEFORE = 50
+_ERROR_CONTEXT_AFTER = 50
+_ERROR_TRAILING_TAIL = 100
+# Word-boundary match on common failure markers, case-insensitive. Broad on
+# purpose — false positives just degrade to "model sees a useful chunk anyway",
+# which is no worse than the flat tail. False negatives fall back to flat tail.
+_ERROR_RE = re.compile(r"\b(error|failed|fatal)\b", re.IGNORECASE)
+
+
+def _build_log_excerpt(full_output: str) -> str:
+    """Extract a focused excerpt from build output.
+
+    If any line matches an error/failed/fatal marker, return ±50 lines
+    around the first hit followed by the last 100 lines of the log
+    (separated by a `--- snip ---` marker so the model can tell the
+    sections apart). Otherwise return the flat 500-line tail.
+    """
+    lines = full_output.splitlines()
+    first_hit: int | None = None
+    for i, line in enumerate(lines):
+        if _ERROR_RE.search(line):
+            first_hit = i
+            break
+
+    if first_hit is None:
+        return "\n".join(lines[-_LOG_TAIL_LINES:])
+
+    around_start = max(0, first_hit - _ERROR_CONTEXT_BEFORE)
+    around_end = min(len(lines), first_hit + _ERROR_CONTEXT_AFTER + 1)
+    around = lines[around_start:around_end]
+    trailing_start = max(around_end, len(lines) - _ERROR_TRAILING_TAIL)
+    trailing = lines[trailing_start:]
+
+    parts = [
+        f"--- first error context (lines {around_start + 1}-{around_end}) ---",
+        "\n".join(around),
+    ]
+    if trailing and trailing_start > around_end:
+        parts.extend(
+            [
+                f"--- snip ({trailing_start - around_end} lines) ---",
+                f"--- trailing tail (lines {trailing_start + 1}-{len(lines)}) ---",
+                "\n".join(trailing),
+            ]
+        )
+    return "\n".join(parts)
+
+
+@dataclass
+class BuildOutcome:
+    """Result of a build attempt with enough context to feed back to the model."""
+
+    ok: bool
+    stage: str
+    returncode: int
+    log_path: str  # path *inside the container* of the captured log
+    log_tail: str  # last N lines, ready to splice into a prompt
+
+
+class BuildRunner:
+    def __init__(self, lxd: LXDManager, cfg: Config) -> None:
+        self._lxd = lxd
+        self._cfg = cfg
+
+    # ------------------------------------------------------------------
+    # Build stages
+    # ------------------------------------------------------------------
+
+    def install_dependencies(self, container: str) -> ExecResult:
+        display.stage_header("install_dependencies")
+        return self._run_stage(container, install_dependencies_stage(self._cfg))
+
+    def prepare_tarball(self, container: str) -> ExecResult:
+        display.stage_header("prepare_tarball")
+        return self._run_stage(container, prepare_tarball_stage(self._cfg))
+
+    def install_build_requirements(self, container: str) -> ExecResult:
+        display.stage_header("install_build_requirements")
+        return self._run_stage(
+            container, install_build_requirements_stage(self._cfg)
+        )
+
+    def build(self, container: str) -> BuildOutcome:
+        display.stage_header("build")
+        stage = build_stage(self._cfg)
+        result = self._run_stage(container, stage)
+        log_path = f"{self._cfg.container_log_dir}/{stage.name}.log"
+        tail = _build_log_excerpt(result.stdout)
+        outcome = BuildOutcome(
+            ok=result.ok,
+            stage=stage.name,
+            returncode=result.returncode,
+            log_path=log_path,
+            log_tail=tail,
+        )
+        display.build_result(outcome.ok, outcome.stage, outcome.log_tail)
+        return outcome
+
+    # ------------------------------------------------------------------
+    # Resolver-specific helpers
+    # ------------------------------------------------------------------
+
+    def apply_diff(self, container: str, diff_text: str) -> ExecResult:
+        """Apply a unified diff to the working tree inside the container."""
+        self._lxd.put_text(container, "/tmp/resolver.diff", diff_text)
+        return self._lxd.exec(
+            container,
+            [
+                "git",
+                "apply",
+                "--index",
+                "--whitespace=nowarn",
+                "/tmp/resolver.diff",
+            ],
+            cwd=self._cfg.container_workdir,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _run_stage(self, container: str, stage: Stage) -> ExecResult:
+        log_path = f"{self._cfg.container_log_dir}/{stage.name}.log"
+        buf = ""
+
+        for step in stage.steps:
+            display.step_start(step.argv)
+            result = self._lxd.exec(container, step.argv, cwd=step.workdir)
+            display.step_done(result.ok, result.returncode, result.stdout + result.stderr)
+            buf += f"=== step: {step.argv} ===\n{result.stdout}"
+            if result.stderr:
+                buf += result.stderr + "\n"
+            self._lxd.put_text(container, log_path, buf)
+            if not result.ok and not step.allow_failure:
+                return ExecResult(result.returncode, buf, result.stderr)
+
+        return ExecResult(0, buf, "")

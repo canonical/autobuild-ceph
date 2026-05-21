@@ -1,0 +1,109 @@
+name: AI Resolver
+
+# Triggered automatically when "Build Ceph" fails.
+# Also supports manual dispatch for testing.
+on:
+  workflow_run:
+    workflows: ["Build Ceph"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: "OpenRouter model ID"
+        default: "deepseek/deepseek-v4-pro"
+        required: false
+      max_iterations:
+        description: "Maximum resolver iterations"
+        default: "1000"
+        required: false
+      launchpad_owner:
+        description: Launchpad owner namespace for the ceph source repo
+        required: false
+        default: lmlogiudice
+
+jobs:
+  resolve:
+    name: AI resolver (${{ matrix.name }})
+    # On workflow_run: only proceed when the upstream build actually failed.
+    # On workflow_dispatch: always run (used for manual testing).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: [ubuntu-latest]
+    # Prep + resolve can take 90–120 minutes; cap at 3 hours.
+    timeout-minutes: 180
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: resolute
+            lxd_image: ubuntu-daily:resolute
+            ubuntu_branch: ubuntu/resolute
+            debian_ref: origin/ubuntu/latest
+            ceph_version: 20.2.0
+          - name: noble
+            lxd_image: ubuntu:24.04
+            ubuntu_branch: ubuntu/noble
+            debian_ref: origin/ubuntu/noble
+            ceph_version: 19.2.3
+
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Model / budget knobs — workflow_dispatch inputs take precedence, then
+      # repo-level Actions variables, then hard-coded defaults.
+      MODEL_NAME: ${{ github.event.inputs.model_name || vars.RESOLVER_MODEL_NAME || 'deepseek/deepseek-v4-pro' }}
+      MAX_ITERATIONS: ${{ github.event.inputs.max_iterations || vars.RESOLVER_MAX_ITERATIONS || '1000' }}
+      MAX_UNCHANGED_ITERATIONS: "5"
+      MAX_WALL_SECONDS: "7200"
+      MAX_INPUT_TOKENS: "16000000"
+      MAX_OUTPUT_TOKENS: "16000000"
+      # Build matrix — sourced from the strategy matrix above to stay in sync
+      # with the Build Ceph workflow.
+      MATRIX_NAME: ${{ matrix.name }}
+      CEPH_VERSION: ${{ matrix.ceph_version }}
+      UBUNTU_BRANCH: ${{ matrix.ubuntu_branch }}
+      DEBIAN_REF: ${{ matrix.debian_ref }}
+      LAUNCHPAD_OWNER: ${{ github.event.inputs.launchpad_owner || 'lmlogiudice' }}
+      # Write the diff to a separate file so the job log shows only the
+      # narrative; the raw patch is uploaded as a workflow artifact.
+      CI_DIFF_FILE: "${{ github.workspace }}/resolver-diff.patch"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install --quiet uv
+
+      - name: Install and initialize LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo iptables -P FORWARD ACCEPT
+          sudo usermod -aG lxd "$USER"
+
+      - name: Run resolver
+        # sg lxd makes the lxd group effective for this step so pylxd can
+        # connect to the LXD unix socket without sudo.
+        # --prep-image launches the series container, runs prep stages
+        # (clone, deps, build-deps), snapshots it as "pristine", then runs the
+        # AI resolution loop.  run-resolver.sh passes all extra args through.
+        run: |
+          sg lxd -c 'bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}'
+
+      - name: Upload resolver transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-transcript-${{ matrix.name }}
+          path: resolver/resolver-transcript.jsonl
+          if-no-files-found: ignore
+
+      - name: Upload diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-diff-${{ matrix.name }}
+          path: "${{ github.workspace }}/resolver-diff.patch"
+          if-no-files-found: ignore
