@@ -30,6 +30,16 @@ class SearchHandlers:
 
         max_matches = max_matches or DEFAULT_GREP_MATCHES
 
+        # Normalise path: if the model passes an absolute container path
+        # (e.g. "/root/ceph/CMakeLists.txt") strip the workdir prefix so we
+        # don't double-prepend and end up with a non-existent path.
+        if path.startswith("/"):
+            workdir = self.cfg.container_workdir.rstrip("/")
+            if path.startswith(workdir + "/"):
+                path = path[len(workdir) + 1:]
+            elif path == workdir:
+                path = "."
+            # else: absolute path outside workdir — pass as-is and let grep fail
         # We rely on grep's recursive mode and let the shell's path resolution
         # apply relative to the workdir. ``-n`` prefixes line numbers; ``-H``
         # ensures path is always shown (even on a single-file target).

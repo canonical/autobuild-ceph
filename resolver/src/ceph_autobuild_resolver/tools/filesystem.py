@@ -42,6 +42,14 @@ class FilesystemHandlers:
         files: list[dict[str, Any]] = []
         for raw in paths:
             rel = guards.normalize(raw)
+            # If the model passed an absolute path that includes the workdir
+            # prefix (e.g. "/root/ceph/debian/control"), strip the prefix so
+            # we don't double-prepend and produce a non-existent path.
+            workdir_rel = self.cfg.container_workdir.lstrip("/")
+            if rel.startswith(workdir_rel + "/"):
+                rel = rel[len(workdir_rel) + 1:]
+            elif rel == workdir_rel:
+                rel = ""
             full = f"{self.cfg.container_workdir}/{rel}"
             count_res = self.lxd.exec(
                 self.container, ["wc", "-l", full], check=False
@@ -99,7 +107,10 @@ class FilesystemHandlers:
         # match. ``-A``/``-B`` give surrounding context. ``-m`` caps grep's
         # own work — we still slice in Python in case multiple match groups
         # appeared on the same line.
-        flags = ["-nbH", f"-A{after_context}", f"-B{before_context}"]
+        # --text forces grep to treat the file as text even if it contains
+        # ANSI escape codes or other byte sequences cmake sometimes writes.
+        # Without this, grep may silently return no matches on cmake logs.
+        flags = ["-nbH", "--text", f"-A{after_context}", f"-B{before_context}"]
         if case_insensitive:
             flags.append("-i")
         flags.append(f"-m{max_matches}")
