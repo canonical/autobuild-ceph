@@ -1,15 +1,17 @@
-"""Launchpad PR creation — stub for first integration test.
+"""Launchpad MR creation.
 
-Until we wire up Launchpad credentials, ``open_pr`` just renders the payload
-to stdout (or to disk via ``--dry-run-output`` plus ``--transcript-path``).
-The shape of the rendered payload is what the real implementation will send.
+dry_run=True (the default when --dry-run-output is passed) routes through
+ci_output.emit_success so the resolver produces CI-friendly output without
+requiring Launchpad credentials.
+
+dry_run=False will submit to Launchpad once that integration is wired up.
 """
 
 from __future__ import annotations
 
-import json
-import sys
 from dataclasses import dataclass
+
+from .ci_output import CISuccessPayload, emit_success
 
 
 @dataclass
@@ -25,16 +27,11 @@ class PRPayload:
 
 def open_pr(payload: PRPayload, dry_run: bool = True) -> None:
     if dry_run:
-        rendered = {
-            "matrix_name": payload.matrix_name,
-            "summary": payload.summary,
-            "failing_command": payload.failing_command,
-            "flags": payload.flags,
-            "transcript_path": payload.transcript_path,
-            "diff_preview": payload.diff[:2000],
-            "diff_bytes": len(payload.diff),
-        }
-        print("=== resolver: PR payload (dry-run) ===", file=sys.stderr)
-        print(json.dumps(rendered, indent=2), file=sys.stderr)
+        emit_success(CISuccessPayload(
+            matrix_name=payload.matrix_name,
+            summary=payload.summary,
+            diff=payload.diff,
+            transcript_path=payload.transcript_path,
+        ))
         return
     raise NotImplementedError("Launchpad MR creation not yet wired up")
