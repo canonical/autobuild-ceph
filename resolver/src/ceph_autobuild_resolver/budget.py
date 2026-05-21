@@ -21,7 +21,9 @@ class Budget:
     input_tokens_used: int = 0
     output_tokens_used: int = 0
     unchanged_streak: int = 0
-    first_build_at: float | None = None
+    # True once any run_build has cleared the dpkg-source/patch phase and
+    # reached actual compilation (or succeeded outright).
+    compilation_reached: bool = False
     _start_time: float = field(default_factory=time.monotonic)
 
     @classmethod
@@ -39,10 +41,10 @@ class Budget:
         self.input_tokens_used += usage.input_tokens
         self.output_tokens_used += usage.output_tokens
 
-    def record_build_attempt(self) -> None:
-        """Call when run_build is dispatched (successful or not)."""
-        if self.first_build_at is None:
-            self.first_build_at = time.monotonic()
+    def record_compilation_reached(self) -> None:
+        """Call when a run_build result shows we cleared the patch/packaging
+        phase and actual C++ compilation has started or completed."""
+        self.compilation_reached = True
 
     def record_unchanged_build(self) -> None:
         """Call when run_build failed and no files changed since the previous
@@ -73,7 +75,7 @@ class Budget:
             return False
         if (
             self.cfg.max_seconds_to_first_build > 0
-            and self.first_build_at is None
+            and not self.compilation_reached
             and elapsed >= self.cfg.max_seconds_to_first_build
         ):
             return False
@@ -93,10 +95,10 @@ class Budget:
             return "wall_time_exceeded"
         if (
             self.cfg.max_seconds_to_first_build > 0
-            and self.first_build_at is None
+            and not self.compilation_reached
             and elapsed >= self.cfg.max_seconds_to_first_build
         ):
-            return "no_build_attempt_in_time"
+            return "compilation_not_reached_in_time"
         if self.unchanged_streak >= self.cfg.max_unchanged_iterations:
             return "no_progress"
         if self.iterations_used >= self.cfg.max_iterations:

@@ -26,6 +26,23 @@ from .transcript import Transcript
 
 log = logging.getLogger(__name__)
 
+
+def _maybe_record_compilation(budget: "Budget", payload: dict) -> None:  # noqa: F821
+    """Mark compilation reached if this run_build result cleared dpkg-source.
+
+    Signals used (in priority order):
+      1. ok=True  — full build succeeded, obviously cleared patching.
+      2. log_tail has no "dpkg-source: error" — we got past patch application
+         and into cmake/ninja/make, even if compilation itself failed.
+    """
+    if payload.get("ok"):
+        budget.record_compilation_reached()
+        return
+    tail = payload.get("log_tail") or ""
+    if tail and "dpkg-source: error" not in tail:
+        budget.record_compilation_reached()
+
+
 # Compress history when it exceeds this many messages, retaining only the
 # most recent _KEEP_RECENT_TURNS entries verbatim plus a summary of the rest.
 # Bounds per-call input tokens to O(n) rather than O(n²) over the loop.
@@ -217,8 +234,8 @@ def run_loop(
 
         for r in outcome.results:
             if r.name == "run_build":
-                if not r.payload.get("skipped"):
-                    budget.record_build_attempt()
+                if not r.payload.get("skipped") and not budget.compilation_reached:
+                    _maybe_record_compilation(budget, r.payload)
                 # Track the first error from every failed build so nudge
                 # messages can be specific about what needs fixing.
                 if not r.payload.get("ok") and not r.payload.get("skipped"):
