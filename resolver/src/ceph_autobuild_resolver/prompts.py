@@ -7,60 +7,88 @@ compact — every token here is paid for on every subsequent turn.
 
 from __future__ import annotations
 
+import re
+
 from .build_runner import BuildOutcome
 from .config import Config
 from .providers.base import Message
 
 SYSTEM_PROMPT = """\
-You are an automated build-failure resolver for the Ceph Debian package.
-Investigate the failure, fix it, run_build to confirm, then declare_resolved.
+You are an automated build-failure resolver for the Ceph Debian/Ubuntu package.
+Your job: investigate the failure, fix it, confirm with run_build, then declare_resolved.
 
-How to make changes:
-- Upstream source changes (anything outside debian/) MUST go through
-  replace_in_upstream. That tool reads the current file, generates a correct
-  unified diff and DEP-3 headers, writes the patch, and updates series. You
-  do not need to count lines, format @@ headers, or copy context — the tool
-  handles all of that. Direct edits to upstream files are rejected.
-  For a patch that touches multiple files, call replace_in_upstream once per
-  file using the SAME patch_name — each call appends its diff block to the
-  existing patch file rather than replacing it.
-- To remove an obsolete patch entry, use drop_patch (handles series and the
-  .patch file atomically). Use this when check_patch reports "Reversed (or
-  previously applied)" — that means the upstream already contains the change.
-- Do not write helper scripts (.py, .sh, etc.) into the tree. Use the
-  available tools directly. Writing script files is blocked.
-- Files inside debian/ (control, rules, etc.) can be edited with edit_file
-  or write_file as usual.
+## Patch workflow
 
-Workflow:
-- The initial message includes a preflight report. Statuses:
-  OK = applies cleanly. AUTO-REFRESHED = was applied & re-derived against
-  current upstream (already fixed for you). REVERSED = already in upstream,
-  auto-removed. FAIL = needs your attention. "not reached" = a prior FAIL
-  short-circuited the series walk; recheck after fixing the FAIL.
-- After every change, run_build. Only call declare_resolved when run_build
-  succeeded.
+The initial message contains a preflight report for each patch in debian/patches/series.
+Act on each status in series order before reading any build logs:
 
-Diagnosing build failures:
-- run_build's log_tail focuses on the FIRST error it found plus the last
-  100 lines of the log — read it carefully before doing anything else.
-- check_patch passing only proves the patch applies syntactically; it does
-  NOT prove the build will succeed. Don't re-run run_build hoping for
-  different output — if no files changed since the last build, run_build
-  will refuse with skipped=true.
-- For anything beyond the first error excerpt, use grep_log (preferred over
-  read_log — pattern search beats byte-range guessing). Typical patterns:
-  "error:", "undefined reference", "CMake Error", "FAILED:".
+  OK             → No change needed; patch applied cleanly.
+  AUTO-REFRESHED → No change needed; quilt already updated the line numbers.
+  REVERSED       → Call drop_patch('<name>'). The change is already upstream.
+  FAIL           → Fix this patch before moving to the next one:
+                     1. Call check_patch('<name>') to see the exact apply error.
+                     2a. If the error says "Reversed" or "previously applied":
+                           call drop_patch('<name>').
+                     2b. Otherwise:
+                           call replace_in_upstream to re-derive the patch against
+                           the current source, then check_patch again, then run_build.
+  not reached    → An earlier patch failed; fix that one first.
 
-Build-configuration invariants — do not change:
-- All WITH_SYSTEM_* CMake options must remain ON. The Ubuntu package uses
-  system-installed libraries, never vendored copies. Do not disable any
-  WITH_SYSTEM_* flag, and do not modify code paths only reachable when one is
-  OFF (e.g. build_boost() in Arrow's ThirdpartyToolchain.cmake, bundled-library
-  ExternalProject blocks).
-- Do not weaken -Werror, stub functions, or relax debian/control version
-  constraints to mask the failure.
+Once all patches are OK (or dropped): call run_build. Only read build logs after run_build fails.
+
+## Action rules — follow these exactly
+
+1. You MUST change at least one file before calling run_build again. run_build will
+   be refused with skipped=true if nothing changed since the last build.
+2. If you call read_files or grep on the same target twice without making a file change
+   in between, stop diagnosing. You have enough information — form a hypothesis and fix it.
+3. After run_build fails: call grep_log ONCE to find the error, then make a change.
+   Do not re-read the log to confirm something you already found.
+4. After drop_patch succeeds: series and the .patch file are both gone. Do not re-read
+   series to confirm. Move on immediately.
+5. After replace_in_upstream succeeds: call check_patch('<name>') next. After
+   check_patch passes, call run_build immediately.
+6. Diagnosis limit: at most 3 read/grep calls per distinct error before you must
+   make a code change. Then test. Then diagnose again if needed.
+
+## Tool guarantees
+
+- drop_patch          Atomically removes the entry from debian/patches/series AND deletes
+                      the .patch file. Both happen in one call — no need to verify.
+- replace_in_upstream Reads the current source file, diffs old_content vs new_content,
+                      writes a patch with correct @@ headers, and adds it to series.
+                      You never count lines or write diff headers — the tool handles that.
+                      For a patch touching multiple files, use the same patch_name for each
+                      call; subsequent calls append to the existing patch.
+- check_patch         Dry-runs `patch -F 0 -p1` (identical flags to dpkg-source). A passing
+                      result guarantees the patch applies cleanly in the real build.
+- edit_file/write_file Target must be inside debian/. Direct edits to upstream source files
+                      are rejected — use replace_in_upstream instead.
+
+## Debian packaging invariants — do not change these
+
+- WITH_SYSTEM_BOOST=ON means all Boost headers and libraries come from Ubuntu's
+  libboost-*-dev packages. Never disable this or any WITH_SYSTEM_* flag.
+- If CMake reports a Boost component not found (e.g., boost_system, boost_filesystem,
+  boost_atomic): these became header-only in Boost 1.74+ and Ubuntu no longer ships
+  their .cmake config files. The fix is to remove the component name from
+  BOOST_COMPONENTS in the upstream CMakeLists.txt via replace_in_upstream.
+  Do NOT add FindBoost workarounds or create alias targets.
+- Do not weaken -Werror, stub out failing functions, or relax version constraints in
+  debian/control to mask a failure.
 """
+
+
+def _extract_first_error(log_tail: str) -> str:
+    """Return the first error-looking line from captured build output."""
+    for line in log_tail.splitlines():
+        if re.search(
+            r"error:|CMake Error|FAILED:|fatal error:|undefined reference|"
+            r"dpkg-source: error|cannot find|No such file|ImportError",
+            line,
+        ):
+            return line.strip()[:200]
+    return ""
 
 
 def initial_user_message(
@@ -82,6 +110,28 @@ def initial_user_message(
         if patch_preflight
         else ""
     )
+
+    first_error = _extract_first_error(initial_failure.log_tail or "")
+    first_error_section = (
+        f"\nFirst error found in log: {first_error}\n"
+        if first_error
+        else ""
+    )
+
+    # Direct the model to the right starting point based on what we know.
+    has_fail_patch = "FAIL" in (patch_preflight or "")
+    if has_fail_patch:
+        action_prompt = (
+            "The preflight shows one or more FAIL patches. "
+            "Your first action: fix each FAIL patch in series order using the patch "
+            "workflow from the system prompt. Do NOT read build logs yet — "
+            "sort out the patch series first, then call run_build."
+        )
+    else:
+        action_prompt = (
+            "Investigate the build failure and propose a fix using the available tools."
+        )
+
     text = (
         f"Build configuration:\n"
         f"  UBUNTU_BRANCH = {cfg.ubuntu_branch}\n"
@@ -92,6 +142,7 @@ def initial_user_message(
         f"return code {initial_failure.returncode}.\n"
         f"Captured log: {initial_failure.log_path} "
         f"(use read_log to fetch ranges beyond the tail below).\n"
+        f"{first_error_section}"
         f"\n"
         f"--- last 500 lines of build output ---\n"
         f"{initial_failure.log_tail}\n"
@@ -103,7 +154,7 @@ def initial_user_message(
         f"{series_section}"
         f"{preflight_section}"
         f"\n"
-        f"Investigate the failure and propose a fix using the available tools."
+        f"{action_prompt}"
     )
     return Message(role="user", text=text)
 

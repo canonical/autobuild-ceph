@@ -15,6 +15,7 @@ One turn through the loop:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from . import display
@@ -132,6 +133,8 @@ def run_loop(
     # True whenever a write_file / edit_file / apply_patch / delete_file
     # succeeded since the last run_build. Used to detect spinning.
     files_changed_since_build = False
+    # First error line from the most recent failed run_build, for nudge messages.
+    last_build_error: str = ""
 
     while budget.has_capacity():
         _compress_history(history)
@@ -207,21 +210,37 @@ def run_loop(
 
         for r in outcome.results:
             if r.name == "run_build":
+                # Track the first error from every failed build so nudge
+                # messages can be specific about what needs fixing.
+                if not r.payload.get("ok") and not r.payload.get("skipped"):
+                    tail = r.payload.get("log_tail") or ""
+                    for line in tail.splitlines():
+                        if re.search(
+                            r"error:|CMake Error|FAILED:|fatal error:|"
+                            r"undefined reference|cannot find",
+                            line,
+                        ):
+                            last_build_error = line.strip()[:200]
+                            break
+
                 # A refused build is the strongest possible no-progress
                 # signal: the model invoked run_build despite the hard
                 # guard already telling it nothing had changed. Treat it
                 # exactly like a failed build with no preceding mutation.
                 if r.payload.get("skipped"):
                     budget.record_unchanged_build()
+                    error_hint = (
+                        f"\nLast known error: {last_build_error}" if last_build_error else ""
+                    )
                     history.append(
                         Message(
                             role="user",
                             text=(
                                 "run_build was REFUSED (no_changes_since_last_build). "
-                                "STOP calling run_build. Use grep_log to find the "
-                                "root cause in the build log, then fix a file with "
-                                "edit_file / write_file / replace_in_upstream. Only "
-                                "after a file mutation succeeds will run_build run."
+                                "You MUST change at least one file before calling run_build. "
+                                "Use edit_file, write_file, replace_in_upstream, or "
+                                "drop_patch to make a fix, then call run_build."
+                                f"{error_hint}"
                             ),
                         )
                     )
@@ -229,6 +248,7 @@ def run_loop(
                 if r.payload.get("ok"):
                     budget.reset_unchanged_streak()
                     files_changed_since_build = False
+                    last_build_error = ""
                 else:
                     if files_changed_since_build:
                         budget.record_failure()
@@ -236,15 +256,19 @@ def run_loop(
                     else:
                         # No file changes since last build — genuine spin.
                         budget.record_unchanged_build()
+                        error_hint = (
+                            f"\nError to fix: {last_build_error}" if last_build_error else ""
+                        )
                         history.append(
                             Message(
                                 role="user",
                                 text=(
-                                    "The build failed again with the same error and "
-                                    "no files were changed since the previous build. "
-                                    "Use grep_log to find the root cause "
-                                    "(e.g. grep_log pattern='error|FAILED'), then "
-                                    "fix a file before calling run_build again."
+                                    "The build failed and no files changed since the "
+                                    "previous build. Stop diagnosing — make a fix now. "
+                                    "Change a file with edit_file, write_file, "
+                                    "replace_in_upstream, or drop_patch, then call "
+                                    "run_build."
+                                    f"{error_hint}"
                                 ),
                             )
                         )
