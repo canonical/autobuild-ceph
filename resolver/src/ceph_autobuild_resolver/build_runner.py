@@ -32,6 +32,11 @@ _ERROR_TRAILING_TAIL = 100
 # purpose — false positives just degrade to "model sees a useful chunk anyway",
 # which is no worse than the flat tail. False negatives fall back to flat tail.
 _ERROR_RE = re.compile(r"\b(error|failed|fatal)\b", re.IGNORECASE)
+# debuild runs with set -x, echoing all environment variables at the start.
+# Some of those variable VALUES contain the word "error" (e.g.
+# DH_OVERIDDEN_COMMAND=@echo 'error: ...'). Skip such assignment lines so
+# the first-error scan finds real build failures, not env-dump noise.
+_ENV_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 
 def _build_log_excerpt(full_output: str) -> str:
@@ -45,6 +50,9 @@ def _build_log_excerpt(full_output: str) -> str:
     lines = full_output.splitlines()
     first_hit: int | None = None
     for i, line in enumerate(lines):
+        # Skip env-variable assignment lines from the debuild set -x preamble.
+        if _ENV_VAR_RE.match(line):
+            continue
         if _ERROR_RE.search(line):
             first_hit = i
             break
