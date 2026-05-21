@@ -136,8 +136,22 @@ class BuildRunner:
     # ------------------------------------------------------------------
 
     def apply_diff(self, container: str, diff_text: str) -> ExecResult:
-        """Apply a unified diff to the working tree inside the container."""
+        """Apply a unified diff to the working tree inside the container.
+
+        The diff is generated relative to git HEAD.  The container may start
+        from a snapshot that already has working-tree modifications (e.g. a
+        "patched" snapshot from a prior session).  Reset to HEAD first so the
+        diff applies cleanly against the expected baseline.
+        """
         self._lxd.put_text(container, "/tmp/resolver.diff", diff_text)
+        # Reset to a clean HEAD baseline (keep debian/ tree since the diff
+        # targets it; upstream src/ changes from quilt are also discarded).
+        self._lxd.exec(
+            container,
+            ["git", "checkout", "HEAD", "--", "."],
+            cwd=self._cfg.container_workdir,
+            check=False,
+        )
         return self._lxd.exec(
             container,
             [
