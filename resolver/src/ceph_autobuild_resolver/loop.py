@@ -217,6 +217,8 @@ def run_loop(
 
         for r in outcome.results:
             if r.name == "run_build":
+                if not r.payload.get("skipped"):
+                    budget.record_build_attempt()
                 # Track the first error from every failed build so nudge
                 # messages can be specific about what needs fixing.
                 if not r.payload.get("ok") and not r.payload.get("skipped"):

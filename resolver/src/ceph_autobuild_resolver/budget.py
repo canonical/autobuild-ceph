@@ -7,7 +7,8 @@ provider-neutral (the adapter normalises to ``Usage``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from .config import Config
 from .providers.base import Usage
@@ -20,6 +21,8 @@ class Budget:
     input_tokens_used: int = 0
     output_tokens_used: int = 0
     unchanged_streak: int = 0
+    first_build_at: float | None = None
+    _start_time: float = field(default_factory=time.monotonic)
 
     @classmethod
     def from_config(cls, cfg: Config) -> "Budget":
@@ -35,6 +38,11 @@ class Budget:
     def record_usage(self, usage: Usage) -> None:
         self.input_tokens_used += usage.input_tokens
         self.output_tokens_used += usage.output_tokens
+
+    def record_build_attempt(self) -> None:
+        """Call when run_build is dispatched (successful or not)."""
+        if self.first_build_at is None:
+            self.first_build_at = time.monotonic()
 
     def record_unchanged_build(self) -> None:
         """Call when run_build failed and no files changed since the previous
@@ -53,7 +61,22 @@ class Budget:
     # Capacity checks
     # ------------------------------------------------------------------
 
+    def _elapsed(self) -> float:
+        return time.monotonic() - self._start_time
+
     def has_capacity(self) -> bool:
+        elapsed = self._elapsed()
+        if (
+            self.cfg.max_wall_seconds > 0
+            and elapsed >= self.cfg.max_wall_seconds
+        ):
+            return False
+        if (
+            self.cfg.max_seconds_to_first_build > 0
+            and self.first_build_at is None
+            and elapsed >= self.cfg.max_seconds_to_first_build
+        ):
+            return False
         return (
             self.iterations_used < self.cfg.max_iterations
             and self.input_tokens_used < self.cfg.max_input_tokens
@@ -62,6 +85,18 @@ class Budget:
         )
 
     def reason_for_stop(self) -> str:
+        elapsed = self._elapsed()
+        if (
+            self.cfg.max_wall_seconds > 0
+            and elapsed >= self.cfg.max_wall_seconds
+        ):
+            return "wall_time_exceeded"
+        if (
+            self.cfg.max_seconds_to_first_build > 0
+            and self.first_build_at is None
+            and elapsed >= self.cfg.max_seconds_to_first_build
+        ):
+            return "no_build_attempt_in_time"
         if self.unchanged_streak >= self.cfg.max_unchanged_iterations:
             return "no_progress"
         if self.iterations_used >= self.cfg.max_iterations:

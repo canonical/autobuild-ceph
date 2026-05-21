@@ -39,6 +39,13 @@ class Config:
     launchpad_owner: str
     ceph_version: str
 
+    # Wall-clock time limits (seconds). 0 = disabled.
+    # max_wall_seconds: hard cap on total loop duration.
+    # max_seconds_to_first_build: stop if run_build hasn't been called within
+    #   this many seconds of loop start — catches a model stuck in pure diagnosis.
+    max_wall_seconds: int = 0
+    max_seconds_to_first_build: int = 0
+
     # Reasoning / thinking. At most one is honoured; max_tokens wins.
     # None on both = thinking disabled (no `reasoning` field sent).
     reasoning_effort: str | None = None
@@ -96,6 +103,8 @@ def load() -> Config:
         max_iterations=_env_int("MAX_ITERATIONS", 20),
         max_unchanged_iterations=_env_int("MAX_UNCHANGED_ITERATIONS", 3),
         run_token_budget=_env_int("RUN_TOKEN_BUDGET", 16_000_000),
+        max_wall_seconds=_env_int("MAX_WALL_SECONDS", 0),
+        max_seconds_to_first_build=_env_int("MAX_SECONDS_TO_FIRST_BUILD", 0),
         ubuntu_branch=os.environ.get("UBUNTU_BRANCH", "ubuntu/resolute"),
         debian_ref=os.environ.get("DEBIAN_REF", "origin/ubuntu/latest"),
         launchpad_owner=os.environ.get("LAUNCHPAD_OWNER", "lmlogiudice"),
