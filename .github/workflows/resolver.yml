@@ -118,7 +118,7 @@ jobs:
           export LAUNCHPAD_OWNER="${LAUNCHPAD_OWNER}"
           export CI_DIFF_FILE="${CI_DIFF_FILE}"
           ENVEOF
-          sg lxd -c "source $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
+          sg lxd -c ". $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
           rm -f "$_env_file"
 
       - name: Upload resolver transcript
