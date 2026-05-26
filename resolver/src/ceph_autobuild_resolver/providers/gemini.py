@@ -134,6 +134,7 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
 
     parts = candidate.content.parts if candidate.content else []
     text_parts: list[str] = []
+    thought_parts: list[str] = []
     tool_calls: list[ToolCall] = []
 
     for part in parts:
@@ -150,8 +151,9 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
             # FunctionCall) that must be echoed back in the next request.
             thought_sig = part.thought_signature or None
             tool_calls.append(ToolCall(id=call_id, name=fc.name, args=args, thought_signature=thought_sig))
-        elif part.text and not part.thought:
-            # Skip thought=True parts (internal reasoning); only collect output text.
+        elif part.text and part.thought:
+            thought_parts.append(part.text)
+        elif part.text:
             text_parts.append(part.text)
 
     meta = response.usage_metadata
@@ -166,6 +168,7 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
     return Message(
         role="model",
         text="\n".join(text_parts) or None,
+        reasoning="\n".join(thought_parts) or None,
         tool_calls=tool_calls,
     ), Usage(input_tokens=input_tokens, output_tokens=output_tokens)
 
