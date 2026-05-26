@@ -1,11 +1,12 @@
 name: AI Resolver
 
-# Triggered automatically when "Build Ceph" fails.
-# Also supports manual dispatch for testing.
 on:
   workflow_run:
     workflows: ["Build Ceph"]
     types: [completed]
+  push:
+    branches:
+      - resolver
   workflow_dispatch:
     inputs:
       model_provider:
@@ -32,9 +33,8 @@ on:
 jobs:
   resolve:
     name: AI resolver (${{ matrix.name }})
-    # On workflow_run: only proceed when the upstream build actually failed.
-    # On workflow_dispatch: always run (used for manual testing).
     if: >
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'failure'
     runs-on: [self-hosted-linux-amd64-noble-xlarge]
