@@ -50,6 +50,47 @@ Once all patches are OK (or dropped): call run_build. Only read build logs after
    check_patch passes, call run_build immediately.
 6. Diagnosis limit: at most 3 read/grep calls per distinct error before you must
    make a code change. Then test. Then diagnose again if needed.
+7. Spinning detection — mandatory strategy change: if you have attempted 3 or more
+   different fixes for the same error (same file, same error message pattern) and none
+   produced a passing build, you are spinning. You MUST stop and change strategy
+   entirely using the decision tree in "When to change strategy" below.
+
+## When to change strategy entirely
+
+Triggered when rule 7 fires (3+ failed fix attempts on the same error) OR when you
+recognise that your current approach is a dead end. Work through this decision tree:
+
+Step 1 — Is the failing code optional/feature-gated?
+  Look at the error location. If the code is inside `#ifdef WITH_SOMETHING`,
+  `#if defined(WITH_SOMETHING)`, or a cmake target that is only built when a
+  WITH_* option is ON, then the feature is optional. Check whether it can be
+  disabled:
+  a. Search CMakeLists.txt for the controlling cmake option (grep for the feature
+     name — the option is usually named `WITH_<FEATURE>`).
+  b. Search debian/rules for any existing `-DWITH_<FEATURE>` flags.
+  c. If a disable flag exists and the feature is not a core Ceph daemon (radosgw,
+     cephfs, rbd, mon, osd are core; language bindings, dashboard plugins, and
+     optional gateway integrations are not), add the flag to the cmake invocation
+     in debian/rules via edit_file. Then also check debian/control for packages
+     that depend on the disabled feature and mark them as removed if needed.
+  d. If you disable a feature package, update debian/rules to skip its install step.
+
+Step 2 — Is there a fundamentally different fix strategy?
+  If the feature cannot be disabled, ask: "Am I solving this at the right layer?"
+  Examples of wrong-layer approaches and their alternatives:
+  - Repeated namespace alias attempts for an API rename → look for a compatibility
+    shim in the library headers, or find what include path exposes the old name.
+  - Repeated #include path changes → look for a pkg-config or cmake find-module
+    that sets the correct paths automatically.
+  - Repeated typedef/using declarations → check if the upstream project already
+    has a compatibility header you can include.
+  Pick the strategy that addresses the root cause rather than working around the
+  symptom.
+
+Step 3 — If no path forward exists:
+  Call declare_unresolvable with a clear statement of what you tried, why each
+  approach failed, and what information would be needed to resolve it. Do not
+  keep spinning.
 
 ## Tool guarantees
 
@@ -92,6 +133,13 @@ Once all patches are OK (or dropped): call run_build. Only read build logs after
   to ${CMAKE_SOURCE_DIR} instead of ${CMAKE_BINARY_DIR}. Find the configure_file() call and
   redirect its output path, or add a dh_clean override in debian/rules to delete the generated
   file. Do NOT try to patch it out by disabling features.
+
+- Compilation errors in optional subsystems: if the error is in a file that implements
+  an optional feature (a language binding, a plugin, a gateway extension, an experimental
+  component), always check whether a cmake -DWITH_* flag can disable it before attempting
+  source patches. Source-level fixes for API-changed third-party interfaces can be
+  indefinitely difficult; disabling the optional feature is often the correct Debian
+  packaging decision.
 """
 
 

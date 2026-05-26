@@ -53,11 +53,16 @@ class ToolCall:
     ``args`` is **already deserialized** to a Python dict — the adapter is
     responsible for parsing the JSON string OpenAI-style providers return.
     Downstream code never has to remember which provider it's running against.
+
+    ``thought_signature`` is Gemini-specific: an opaque bytes blob that MUST be
+    echoed back on the Part when replaying a model turn from a thinking model.
+    Non-Gemini adapters leave this None.
     """
 
     id: str
     name: str
     args: dict[str, Any]
+    thought_signature: bytes | None = None
 
 
 @dataclass

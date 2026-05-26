@@ -142,7 +142,7 @@ def test_chat_round_trips_with_mock_transport():
 
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
-    adapter = OpenRouterAdapter(api_key="sk-test", model="m", client=client)
+    adapter = OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
     adapter.declare_tools(
         [
             ToolSchema(
@@ -244,7 +244,7 @@ def test_chat_forwards_reasoning_param():
     adapter = OpenRouterAdapter(
         api_key="sk-test",
         model="m",
-        client=client,
+        http_client=client,
         reasoning={"max_tokens": 4000},
     )
     adapter.chat([Message(role="user", text="hi")])
@@ -268,7 +268,7 @@ def test_chat_omits_reasoning_when_disabled():
 
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
-    adapter = OpenRouterAdapter(api_key="sk-test", model="m", client=client)
+    adapter = OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
     adapter.chat([Message(role="user", text="hi")])
     assert "reasoning" not in captured["body"]
 
@@ -343,7 +343,7 @@ def test_chat_sends_anthropic_beta_header_for_claude_model():
     adapter = OpenRouterAdapter(
         api_key="sk-test",
         model="anthropic/claude-sonnet-4-5",
-        client=client,
+        http_client=client,
     )
     adapter.chat([Message(role="user", text="hi")])
     assert captured["headers"].get("anthropic-beta") == "prompt-caching-2024-07-31"
@@ -367,7 +367,7 @@ def test_chat_no_anthropic_beta_header_for_non_claude_model():
     adapter = OpenRouterAdapter(
         api_key="sk-test",
         model="google/gemini-2.0-flash",
-        client=client,
+        http_client=client,
     )
     adapter.chat([Message(role="user", text="hi")])
     assert "anthropic-beta" not in captured["headers"]
@@ -395,7 +395,7 @@ def test_retry_on_connect_error_then_success():
 
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
-    adapter = OpenRouterAdapter(api_key="sk-test", model="m", client=client)
+    adapter = OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
 
     with patch("time.sleep"):
         reply, usage = adapter.chat([Message(role="user", text="hi")])
@@ -416,7 +416,7 @@ def test_retry_on_503_then_success():
 
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
-    adapter = OpenRouterAdapter(api_key="sk-test", model="m", client=client)
+    adapter = OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
 
     with patch("time.sleep"):
         reply, _ = adapter.chat([Message(role="user", text="hi")])
@@ -426,14 +426,15 @@ def test_retry_on_503_then_success():
 
 
 def test_connect_error_exhausts_retries():
-    """Persistent ConnectError re-raises after max_attempts."""
+    """Persistent ConnectError re-raises (wrapped by the SDK) after max retries."""
+    import openai
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("always failing")
 
     transport = httpx.MockTransport(handler)
     client = httpx.Client(transport=transport)
-    adapter = OpenRouterAdapter(api_key="sk-test", model="m", client=client)
+    adapter = OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
 
-    with patch("time.sleep"), pytest.raises(httpx.ConnectError):
+    with patch("time.sleep"), pytest.raises(openai.APIConnectionError):
         adapter.chat([Message(role="user", text="hi")])

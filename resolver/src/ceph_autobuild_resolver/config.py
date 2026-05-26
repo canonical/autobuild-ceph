@@ -79,7 +79,7 @@ def load() -> Config:
         default_model = "anthropic/claude-sonnet-4-5"
     else:
         api_key = os.environ.get("GEMINI_API_KEY", "")
-        default_model = "gemini-2.0-flash"
+        default_model = "gemini-2.5-flash"
 
     if not api_key:
         raise ConfigError(

@@ -23,6 +23,7 @@ src/ceph_autobuild_resolver.egg-info/entry_points.txt
 src/ceph_autobuild_resolver.egg-info/requires.txt
 src/ceph_autobuild_resolver.egg-info/top_level.txt
 src/ceph_autobuild_resolver/output/__init__.py
+src/ceph_autobuild_resolver/output/ci_output.py
 src/ceph_autobuild_resolver/output/launchpad_bug.py
 src/ceph_autobuild_resolver/output/launchpad_pr.py
 src/ceph_autobuild_resolver/providers/__init__.py
