@@ -2,8 +2,8 @@
 
 set -eux
 
-sudo apt update
-sudo apt install -y devscripts git-buildpackage equivs python3-venv default-jdk javahelper dh-python
+DEBIAN_FRONTEND=noninteractive sudo apt update
+DEBIAN_FRONTEND=noninteractive sudo apt install -y devscripts git-buildpackage equivs python3-venv default-jdk javahelper dh-python
 
 # check out upstream repo and generate tarball
 git clone https://github.com/ceph/ceph
@@ -32,6 +32,6 @@ git rm debian/compat || true
 git commit -m "add debian directory"
 
 sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-sudo mk-build-deps -i -t "apt-get -o Debug::pkgProblemResolver=1 -y --no-install-recommends" debian/control
+DEBIAN_FRONTEND=noninteractive sudo mk-build-deps -i -t "apt-get -o Debug::pkgProblemResolver=1 -y --no-install-recommends" debian/control
 rm *.buildinfo *.changes *.deb || true
 debuild --no-lintian -us -uc -d   # build the package
