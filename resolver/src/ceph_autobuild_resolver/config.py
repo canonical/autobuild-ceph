@@ -25,8 +25,6 @@ class Config:
     api_key: str
 
     # Budget caps (per-failure)
-    max_input_tokens: int
-    max_output_tokens: int
     max_iterations: int
     max_unchanged_iterations: int
 
@@ -98,8 +96,6 @@ def load() -> Config:
         provider=provider,  # type: ignore[arg-type]
         model_name=os.environ.get("MODEL_NAME", default_model),
         api_key=api_key,
-        max_input_tokens=_env_int("MAX_INPUT_TOKENS", 8_000_000),
-        max_output_tokens=_env_int("MAX_OUTPUT_TOKENS", 8_000_000),
         max_iterations=_env_int("MAX_ITERATIONS", 20),
         max_unchanged_iterations=_env_int("MAX_UNCHANGED_ITERATIONS", 3),
         run_token_budget=_env_int("RUN_TOKEN_BUDGET", 16_000_000),

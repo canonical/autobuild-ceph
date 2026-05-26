@@ -170,8 +170,6 @@ def _prep_only_config():
         provider="openrouter",
         model_name="unused",
         api_key="unused",
-        max_input_tokens=0,
-        max_output_tokens=0,
         max_iterations=0,
         max_unchanged_iterations=0,
         run_token_budget=0,

@@ -81,8 +81,6 @@ class Budget:
             return False
         return (
             self.iterations_used < self.cfg.max_iterations
-            and self.input_tokens_used < self.cfg.max_input_tokens
-            and self.output_tokens_used < self.cfg.max_output_tokens
             and self.unchanged_streak < self.cfg.max_unchanged_iterations
         )
 
@@ -103,8 +101,4 @@ class Budget:
             return "no_progress"
         if self.iterations_used >= self.cfg.max_iterations:
             return "max_iterations"
-        if self.input_tokens_used >= self.cfg.max_input_tokens:
-            return "max_input_tokens"
-        if self.output_tokens_used >= self.cfg.max_output_tokens:
-            return "max_output_tokens"
         return "ok"
