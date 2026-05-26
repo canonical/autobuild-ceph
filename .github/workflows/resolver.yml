@@ -4,9 +4,7 @@ on:
   workflow_run:
     workflows: ["Build Ceph"]
     types: [completed]
-  pull_request:
-    branches:
-      - main
+
   workflow_dispatch:
     inputs:
       model_provider:
@@ -34,7 +32,6 @@ jobs:
   resolve:
     name: AI resolver (${{ matrix.name }})
     if: >
-      github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'failure'
     runs-on: [self-hosted-linux-amd64-noble-xlarge]
@@ -98,7 +95,6 @@ jobs:
         # Write env vars (including secrets) to a chmod 600 temp file and
         # source it inside sg so secret values never appear in the process list.
         run: |
-          echo "DEBUG: GEMINI_API_KEY length=${#GEMINI_API_KEY} MODEL_PROVIDER=${MODEL_PROVIDER}"
           _env_file=$(mktemp)
           chmod 600 "$_env_file"
           for _var in GEMINI_API_KEY OPENROUTER_API_KEY MODEL_PROVIDER MODEL_NAME \
@@ -107,7 +103,6 @@ jobs:
                       DEBIAN_REF LAUNCHPAD_OWNER CI_DIFF_FILE; do
             printf 'export %s=%q\n' "$_var" "${!_var}" >> "$_env_file"
           done
-          echo "DEBUG: env file line count=$(wc -l < "$_env_file") GEMINI line=$(grep -c GEMINI "$_env_file")"
           sg lxd -c ". $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
           rm -f "$_env_file"
 
