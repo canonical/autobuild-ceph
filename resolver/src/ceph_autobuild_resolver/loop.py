@@ -166,6 +166,7 @@ def run_loop(
 
         reply, usage = provider.chat(history)
         budget.record_usage(usage)
+        display.token_usage(budget.input_tokens_used, budget.output_tokens_used, budget.cfg.run_token_budget)
         transcript.model_turn(reply, usage)
         history.append(reply)
         if reply.reasoning:

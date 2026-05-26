@@ -72,6 +72,15 @@ def model_reasoning(text: str) -> None:
     )
 
 
+def token_usage(input_tokens: int, output_tokens: int, budget: int) -> None:
+    total = input_tokens + output_tokens
+    budget_str = f" / {budget:,} budget" if budget > 0 else ""
+    _c.print(
+        f"  [dim]tokens: {input_tokens:,} in · {output_tokens:,} out · "
+        f"{total:,} total{budget_str}[/dim]"
+    )
+
+
 def tool_dispatch(name: str, args: dict) -> None:
     """One-liner shown before every tool call."""
     parts = ", ".join(
