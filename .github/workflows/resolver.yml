@@ -34,7 +34,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'failure'
-    runs-on: [self-hosted-linux-amd64-noble-xlarge]
+    environment: Autobuild
     timeout-minutes: 720
 
     strategy:
