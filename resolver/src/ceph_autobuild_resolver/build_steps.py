@@ -43,21 +43,17 @@ def install_dependencies_stage(cfg: Config) -> Stage:
                 ],
                 workdir="/root",
             ),
-            Step(["sudo", "apt", "update"], workdir="/root"),
+            Step(
+                ["bash", "-c", "DEBIAN_FRONTEND=noninteractive sudo apt update"],
+                workdir="/root",
+            ),
             Step(
                 [
-                    "sudo",
-                    "apt",
-                    "install",
-                    "-y",
-                    "devscripts",
-                    "git-buildpackage",
-                    "equivs",
-                    "python3-venv",
-                    "default-jdk",
-                    "javahelper",
-                    "dh-python",
-                    "quilt",
+                    "bash",
+                    "-c",
+                    "DEBIAN_FRONTEND=noninteractive sudo apt install -y"
+                    " devscripts git-buildpackage equivs python3-venv"
+                    " default-jdk javahelper dh-python quilt",
                 ],
                 workdir="/root",
             ),
@@ -171,12 +167,11 @@ def install_build_requirements_stage(cfg: Config) -> Stage:
             ),
             Step(
                 [
-                    "sudo",
-                    "mk-build-deps",
-                    "-i",
-                    "-t",
-                    "apt-get -o Debug::pkgProblemResolver=1 -y --no-install-recommends",
-                    "debian/control",
+                    "bash",
+                    "-c",
+                    "DEBIAN_FRONTEND=noninteractive sudo mk-build-deps -i"
+                    " -t 'apt-get -o Debug::pkgProblemResolver=1 -y --no-install-recommends'"
+                    " debian/control",
                 ],
                 workdir=ceph_workdir,
             ),
