@@ -2,6 +2,10 @@
 
 set -eux
 
+# TODO: REMOVE BEFORE MERGE — forces immediate build failure to trigger resolver in CI
+echo "Intentional failure for resolver testing" >&2
+exit 1
+
 DEBIAN_FRONTEND=noninteractive sudo apt update
 DEBIAN_FRONTEND=noninteractive sudo apt install -y devscripts git-buildpackage equivs python3-venv default-jdk javahelper dh-python
 
