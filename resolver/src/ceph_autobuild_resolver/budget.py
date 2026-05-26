@@ -66,6 +66,10 @@ class Budget:
     def _elapsed(self) -> float:
         return time.monotonic() - self._start_time
 
+    @property
+    def total_tokens_used(self) -> int:
+        return self.input_tokens_used + self.output_tokens_used
+
     def has_capacity(self) -> bool:
         elapsed = self._elapsed()
         if (
@@ -77,6 +81,11 @@ class Budget:
             self.cfg.max_seconds_to_first_build > 0
             and not self.compilation_reached
             and elapsed >= self.cfg.max_seconds_to_first_build
+        ):
+            return False
+        if (
+            self.cfg.run_token_budget > 0
+            and self.total_tokens_used >= self.cfg.run_token_budget
         ):
             return False
         return (
@@ -97,6 +106,11 @@ class Budget:
             and elapsed >= self.cfg.max_seconds_to_first_build
         ):
             return "compilation_not_reached_in_time"
+        if (
+            self.cfg.run_token_budget > 0
+            and self.total_tokens_used >= self.cfg.run_token_budget
+        ):
+            return "token_budget_exceeded"
         if self.unchanged_streak >= self.cfg.max_unchanged_iterations:
             return "no_progress"
         if self.iterations_used >= self.cfg.max_iterations:
