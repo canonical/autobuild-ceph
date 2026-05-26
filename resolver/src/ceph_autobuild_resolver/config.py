@@ -68,7 +68,7 @@ def _env_int(name: str, default: int) -> int:
 
 def load() -> Config:
     """Build a Config from the current environment."""
-    provider = os.environ.get("MODEL_PROVIDER", "openrouter").lower()
+    provider = os.environ.get("MODEL_PROVIDER", "gemini").lower()
     if provider not in ("openrouter", "gemini"):
         raise ConfigError(
             f"MODEL_PROVIDER must be 'openrouter' or 'gemini', got {provider!r}"
@@ -79,7 +79,7 @@ def load() -> Config:
         default_model = "anthropic/claude-sonnet-4-5"
     else:
         api_key = os.environ.get("GEMINI_API_KEY", "")
-        default_model = "gemini-2.5-flash"
+        default_model = "gemini-3.1-pro-preview"
 
     if not api_key:
         raise ConfigError(

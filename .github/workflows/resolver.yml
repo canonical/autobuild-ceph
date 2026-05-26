@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       model_name:
-        description: "OpenRouter model ID"
-        default: "deepseek/deepseek-v4-pro"
+        description: "Model ID (Gemini or OpenRouter)"
+        default: "gemini-3.1-pro-preview"
         required: false
       max_iterations:
         description: "Maximum resolver iterations"
@@ -52,10 +52,12 @@ jobs:
             ceph_version: 19.2.3
 
     env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       # Model / budget knobs — workflow_dispatch inputs take precedence, then
       # repo-level Actions variables, then hard-coded defaults.
-      MODEL_NAME: ${{ github.event.inputs.model_name || vars.RESOLVER_MODEL_NAME || 'deepseek/deepseek-v4-pro' }}
+      MODEL_PROVIDER: ${{ vars.RESOLVER_MODEL_PROVIDER || 'gemini' }}
+      MODEL_NAME: ${{ github.event.inputs.model_name || vars.RESOLVER_MODEL_NAME || 'gemini-3.1-pro-preview' }}
       MAX_ITERATIONS: ${{ github.event.inputs.max_iterations || vars.RESOLVER_MAX_ITERATIONS || '1000' }}
       MAX_UNCHANGED_ITERATIONS: "5"
       MAX_WALL_SECONDS: "7200"
