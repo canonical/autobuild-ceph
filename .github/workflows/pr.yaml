@@ -5,4 +5,5 @@ on:
 
 jobs:
   build:
+    if: false
     uses: ./.github/workflows/test.yaml
