@@ -98,7 +98,7 @@ def load() -> Config:
         api_key=api_key,
         max_iterations=_env_int("MAX_ITERATIONS", 20),
         max_unchanged_iterations=_env_int("MAX_UNCHANGED_ITERATIONS", 3),
-        run_token_budget=_env_int("RUN_TOKEN_BUDGET", 16_000_000),
+        run_token_budget=_env_int("RUN_TOKEN_BUDGET", 32_000_000),
         max_wall_seconds=_env_int("MAX_WALL_SECONDS", 0),
         max_seconds_to_first_build=_env_int("MAX_SECONDS_TO_FIRST_BUILD", 0),
         ubuntu_branch=os.environ.get("UBUNTU_BRANCH", "ubuntu/resolute"),

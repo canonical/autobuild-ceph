@@ -25,7 +25,7 @@ on:
         required: false
       run_token_budget:
         description: "Total token budget for the run"
-        default: "16000000"
+        default: "32000000"
         required: false
       launchpad_owner:
         description: Launchpad owner namespace for the ceph source repo
@@ -68,7 +68,7 @@ jobs:
       MAX_ITERATIONS: ${{ github.event.inputs.max_iterations || vars.RESOLVER_MAX_ITERATIONS || '1000' }}
       MAX_UNCHANGED_ITERATIONS: "5"
       MAX_WALL_SECONDS: "7200"
-      RUN_TOKEN_BUDGET: ${{ github.event.inputs.run_token_budget || '16000000' }}
+      RUN_TOKEN_BUDGET: ${{ github.event.inputs.run_token_budget || '32000000' }}
       # Build matrix — sourced from the strategy matrix above to stay in sync
       # with the Build Ceph workflow.
       MATRIX_NAME: ${{ matrix.name }}
