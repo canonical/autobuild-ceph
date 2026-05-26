@@ -8,6 +8,10 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
+      model_provider:
+        description: "Model provider (gemini or openrouter)"
+        default: "gemini"
+        required: false
       model_name:
         description: "Model ID (Gemini or OpenRouter)"
         default: "gemini-3.1-pro-preview"
@@ -56,7 +60,7 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       # Model / budget knobs — workflow_dispatch inputs take precedence, then
       # repo-level Actions variables, then hard-coded defaults.
-      MODEL_PROVIDER: ${{ vars.RESOLVER_MODEL_PROVIDER || 'gemini' }}
+      MODEL_PROVIDER: ${{ github.event.inputs.model_provider || vars.RESOLVER_MODEL_PROVIDER || 'gemini' }}
       MODEL_NAME: ${{ github.event.inputs.model_name || vars.RESOLVER_MODEL_NAME || 'gemini-3.1-pro-preview' }}
       MAX_ITERATIONS: ${{ github.event.inputs.max_iterations || vars.RESOLVER_MAX_ITERATIONS || '1000' }}
       MAX_UNCHANGED_ITERATIONS: "5"
