@@ -144,12 +144,25 @@ class BuildRunner:
         diff applies cleanly against the expected baseline.
         """
         self._lxd.put_text(container, "/tmp/resolver.diff", diff_text)
-        # Reset to a clean HEAD baseline (keep debian/ tree since the diff
-        # targets it; upstream src/ changes from quilt are also discarded).
-        self._lxd.exec(
+        # Reset working tree AND index to a clean HEAD baseline.
+        # git checkout resets the working tree; git reset resets the index
+        # (needed if apply_diff is called multiple times in the same container).
+        self._lxd.exec_shell(
             container,
-            ["git", "checkout", "HEAD", "--", "."],
-            cwd=self._cfg.container_workdir,
+            f"cd {self._cfg.container_workdir} && "
+            "git checkout HEAD -- . >/dev/null 2>&1; "
+            "git reset HEAD -- . >/dev/null 2>&1",
+            check=False,
+        )
+        # Remove untracked files in debian/ that the diff adds as new files.
+        # git apply aborts (silently, exit 0) when a "new file" already exists
+        # in the working tree, leaving every subsequent hunk unapplied.  This
+        # happens when the pristine snapshot predates a fresh git clone (e.g.
+        # patch files copied in before the resolver started).
+        self._lxd.exec_shell(
+            container,
+            f"cd {self._cfg.container_workdir} && "
+            "git ls-files -o debian/ | xargs -r rm -f",
             check=False,
         )
         return self._lxd.exec(

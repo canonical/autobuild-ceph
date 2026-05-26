@@ -566,11 +566,19 @@ def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
     # Stage only the paths the model is allowed to change.  debhelper staging
     # trees (debian/ceph-*/…) and quilt artefacts in src/ are intentionally
     # excluded.
+    #
+    # git add fails fatally if any listed pathspec doesn't match a real file,
+    # which silently suppresses ALL staging when 2>/dev/null is used.  Stage
+    # debian/patches/ (always a dir) first, then add individual top-level
+    # debian/ files only when they exist.
     stage_cmd = (
         f"cd {cfg.container_workdir} && "
-        "git reset HEAD -- . 2>/dev/null; "  # unstage any prior git add -A residue
-        "git add -- debian/patches/ debian/rules debian/control "
-        "debian/changelog debian/copyright debian/compat 2>/dev/null; "
+        "git reset HEAD -- . >/dev/null 2>&1; "  # git reset writes status to stdout
+        "git add -- debian/patches/ 2>/dev/null; "
+        "for _f in debian/rules debian/control debian/changelog "
+        "          debian/copyright debian/compat debian/gbp.conf; do "
+        '  [ -e "$_f" ] && git add -- "$_f" 2>/dev/null; '
+        "done; "
         "git diff --staged"
     )
     result = lxd.exec_shell(container, stage_cmd, check=False)
