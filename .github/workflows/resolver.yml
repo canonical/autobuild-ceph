@@ -100,24 +100,14 @@ jobs:
         run: |
           _env_file=$(mktemp)
           chmod 600 "$_env_file"
-          # Unquoted heredoc: shell expands variables before writing to file.
+          # Write each var with printf %q so values are properly shell-quoted.
           # Secrets land in a 600-perms file, not in the process list.
-          cat > "$_env_file" << ENVEOF
-          export GEMINI_API_KEY="${GEMINI_API_KEY}"
-          export OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
-          export MODEL_PROVIDER="${MODEL_PROVIDER}"
-          export MODEL_NAME="${MODEL_NAME}"
-          export MAX_ITERATIONS="${MAX_ITERATIONS}"
-          export MAX_UNCHANGED_ITERATIONS="${MAX_UNCHANGED_ITERATIONS}"
-          export MAX_WALL_SECONDS="${MAX_WALL_SECONDS}"
-          export RUN_TOKEN_BUDGET="${RUN_TOKEN_BUDGET}"
-          export MATRIX_NAME="${MATRIX_NAME}"
-          export CEPH_VERSION="${CEPH_VERSION}"
-          export UBUNTU_BRANCH="${UBUNTU_BRANCH}"
-          export DEBIAN_REF="${DEBIAN_REF}"
-          export LAUNCHPAD_OWNER="${LAUNCHPAD_OWNER}"
-          export CI_DIFF_FILE="${CI_DIFF_FILE}"
-          ENVEOF
+          for _var in GEMINI_API_KEY OPENROUTER_API_KEY MODEL_PROVIDER MODEL_NAME \
+                      MAX_ITERATIONS MAX_UNCHANGED_ITERATIONS MAX_WALL_SECONDS \
+                      RUN_TOKEN_BUDGET MATRIX_NAME CEPH_VERSION UBUNTU_BRANCH \
+                      DEBIAN_REF LAUNCHPAD_OWNER CI_DIFF_FILE; do
+            printf 'export %s=%q\n' "$_var" "${!_var}" >> "$_env_file"
+          done
           sg lxd -c ". $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
           rm -f "$_env_file"
 
