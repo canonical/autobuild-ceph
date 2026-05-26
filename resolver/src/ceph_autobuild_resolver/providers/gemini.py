@@ -70,6 +70,7 @@ class GeminiAdapter(ProviderAdapter):
                 [types.Tool(function_declarations=self._fn_declarations)]
                 if self._fn_declarations else None
             ),
+            thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
         log.debug("gemini request: %d content turns", len(contents))
