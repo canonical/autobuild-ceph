@@ -94,26 +94,32 @@ jobs:
       - name: Run resolver
         # sg lxd makes the lxd group effective for this step so pylxd can
         # connect to the LXD unix socket without sudo.
-        # sg spawns a fresh shell that doesn't inherit the parent environment,
-        # so secrets and env vars must be passed explicitly via the command string.
+        # sg spawns a fresh shell that doesn't inherit the parent environment.
+        # Write env vars (including secrets) to a chmod 600 temp file and
+        # source it inside sg so secret values never appear in the process list.
         run: |
-          sg lxd -c "
-            export GEMINI_API_KEY='${GEMINI_API_KEY}'
-            export OPENROUTER_API_KEY='${OPENROUTER_API_KEY}'
-            export MODEL_PROVIDER='${MODEL_PROVIDER}'
-            export MODEL_NAME='${MODEL_NAME}'
-            export MAX_ITERATIONS='${MAX_ITERATIONS}'
-            export MAX_UNCHANGED_ITERATIONS='${MAX_UNCHANGED_ITERATIONS}'
-            export MAX_WALL_SECONDS='${MAX_WALL_SECONDS}'
-            export RUN_TOKEN_BUDGET='${RUN_TOKEN_BUDGET}'
-            export MATRIX_NAME='${MATRIX_NAME}'
-            export CEPH_VERSION='${CEPH_VERSION}'
-            export UBUNTU_BRANCH='${UBUNTU_BRANCH}'
-            export DEBIAN_REF='${DEBIAN_REF}'
-            export LAUNCHPAD_OWNER='${LAUNCHPAD_OWNER}'
-            export CI_DIFF_FILE='${CI_DIFF_FILE}'
-            bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}
-          "
+          _env_file=$(mktemp)
+          chmod 600 "$_env_file"
+          # Unquoted heredoc: shell expands variables before writing to file.
+          # Secrets land in a 600-perms file, not in the process list.
+          cat > "$_env_file" << ENVEOF
+          export GEMINI_API_KEY="${GEMINI_API_KEY}"
+          export OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"
+          export MODEL_PROVIDER="${MODEL_PROVIDER}"
+          export MODEL_NAME="${MODEL_NAME}"
+          export MAX_ITERATIONS="${MAX_ITERATIONS}"
+          export MAX_UNCHANGED_ITERATIONS="${MAX_UNCHANGED_ITERATIONS}"
+          export MAX_WALL_SECONDS="${MAX_WALL_SECONDS}"
+          export RUN_TOKEN_BUDGET="${RUN_TOKEN_BUDGET}"
+          export MATRIX_NAME="${MATRIX_NAME}"
+          export CEPH_VERSION="${CEPH_VERSION}"
+          export UBUNTU_BRANCH="${UBUNTU_BRANCH}"
+          export DEBIAN_REF="${DEBIAN_REF}"
+          export LAUNCHPAD_OWNER="${LAUNCHPAD_OWNER}"
+          export CI_DIFF_FILE="${CI_DIFF_FILE}"
+          ENVEOF
+          sg lxd -c "source $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
+          rm -f "$_env_file"
 
       - name: Upload resolver transcript
         if: always()
