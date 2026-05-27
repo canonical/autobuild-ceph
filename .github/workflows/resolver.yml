@@ -76,6 +76,9 @@ jobs:
       UBUNTU_BRANCH: ${{ matrix.ubuntu_branch }}
       DEBIAN_REF: ${{ matrix.debian_ref }}
       LAUNCHPAD_OWNER: ${{ github.event.inputs.launchpad_owner || 'lmlogiudice' }}
+      # ccache: persist compiled objects across resolver iterations and CI runs.
+      # The runner-local path is bind-mounted into each LXD container as /root/ccache.
+      CCACHE_HOST_DIR: /var/cache/ccache/ceph-${{ matrix.name }}
       # Write the diff to a separate file so the job log shows only the
       # narrative; the raw patch is uploaded as a workflow artifact.
       CI_DIFF_FILE: "${{ github.workspace }}/resolver-diff.patch"
@@ -94,23 +97,26 @@ jobs:
           sudo iptables -P FORWARD ACCEPT
           sudo usermod -aG lxd "$USER"
 
+      - name: Prepare ccache directory
+        run: sudo install -d -m 1777 "$CCACHE_HOST_DIR"
+
       - name: Run resolver
         # sg lxd makes the lxd group effective for this step so pylxd can
         # connect to the LXD unix socket without sudo.
-        # sg spawns a fresh shell that doesn't inherit the parent environment.
-        # Write env vars (including secrets) to a chmod 600 temp file and
-        # source it inside sg so secret values never appear in the process list.
         run: |
-          _env_file=$(mktemp)
-          chmod 600 "$_env_file"
-          for _var in GEMINI_API_KEY OPENROUTER_API_KEY MODEL_PROVIDER MODEL_NAME \
-                      MAX_ITERATIONS MAX_UNCHANGED_ITERATIONS MAX_WALL_SECONDS \
-                      RUN_TOKEN_BUDGET MATRIX_NAME CEPH_VERSION UBUNTU_BRANCH \
-                      DEBIAN_REF LAUNCHPAD_OWNER CI_DIFF_FILE; do
-            printf 'export %s=%q\n' "$_var" "${!_var}" >> "$_env_file"
-          done
-          sg lxd -c ". $_env_file && bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
-          rm -f "$_env_file"
+          sg lxd -c "bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
+
+      - name: ccache stats
+        if: always()
+        run: |
+          echo "=== ccache stats for $MATRIX_NAME ==="
+          if [ -d "$CCACHE_HOST_DIR" ]; then
+            du -sh "$CCACHE_HOST_DIR"
+            lxc exec ceph-build -- bash -c \
+              "CCACHE_DIR=/root/ccache ccache --print-stats 2>/dev/null" || true
+          else
+            echo "(cache dir not present)"
+          fi
 
       - name: Upload resolver transcript
         if: always()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
+import time
 from dataclasses import dataclass
 
 from . import display, prompts, validation
@@ -40,6 +42,8 @@ def run(
     transcript_path: str,
     dry_run_output: bool,
 ) -> Outcome:
+    display.startup_info(cfg.model_name, cfg.provider, cfg.ccache_host_dir)
+    _start = time.monotonic()
     transcript = Transcript(transcript_path)
     lxd = LXDManager()
     runner = BuildRunner(lxd, cfg)
@@ -63,6 +67,12 @@ def run(
             "container state (may have stale modifications from prior runs)",
             container, pristine_snapshot, exc,
         )
+
+    if cfg.ccache_host_dir:
+        from .prep import _prepare_ccache_dir
+        if _prepare_ccache_dir(cfg.ccache_host_dir):
+            log.info("ensuring ccache device %s -> /root/ccache", cfg.ccache_host_dir)
+            lxd.attach_disk_device(container, "ccache", cfg.ccache_host_dir, "/root/ccache")
 
     # 1. First build attempt against the pristine state. If it works, we're
     #    done before touching the model.
@@ -148,8 +158,26 @@ def run(
         transcript=transcript,
     )
 
+    def _emit_summary(*, success, stop_reason, resolution_summary="", diff="", last_error=""):
+        display.run_summary(
+            success=success,
+            stop_reason=stop_reason,
+            iterations=budget.iterations_used,
+            total_tokens=budget.total_tokens_used,
+            elapsed_seconds=time.monotonic() - _start,
+            initial_error=_first_error_line(current_failure.log_tail),
+            resolution_summary=resolution_summary or "",
+            diff=diff,
+            last_build_error=last_error,
+        )
+
     if not loop_result.declared_resolved:
         transcript.outcome("loop_failed", stop_reason=loop_result.stop_reason)
+        _emit_summary(
+            success=False,
+            stop_reason=loop_result.stop_reason,
+            last_error=_last_build_error(loop_result.history),
+        )
         file_bug(
             BugPayload(
                 matrix_name=matrix_name,
@@ -177,6 +205,7 @@ def run(
         dry_run_output=dry_run_output,
         initial=initial,
         summary=summary,
+        emit_summary=_emit_summary,
     )
 
 
@@ -192,6 +221,7 @@ def _validate_and_publish(
     dry_run_output: bool,
     initial,  # BuildOutcome
     summary: str,
+    emit_summary=None,
 ) -> Outcome:
     """Validate via clean rebuild and either open a PR or file a bug."""
     diff = _capture_diff(lxd, container, cfg)
@@ -210,6 +240,15 @@ def _validate_and_publish(
 
     if not val.ok:
         transcript.outcome("validation_failed")
+        if emit_summary:
+            emit_summary(
+                success=False,
+                stop_reason="validation_failed",
+                diff=diff,
+                last_error=_first_error_line(
+                    val.build_outcome.log_tail or val.apply_stderr
+                ),
+            )
         file_bug(
             BugPayload(
                 matrix_name=matrix_name,
@@ -223,6 +262,8 @@ def _validate_and_publish(
         return Outcome(1, "validation failed on clean rebuild")
 
     transcript.outcome("success")
+    if emit_summary:
+        emit_summary(success=True, stop_reason="resolved", resolution_summary=summary, diff=diff)
     open_pr(
         PRPayload(
             matrix_name=matrix_name,
@@ -583,3 +624,33 @@ def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
     )
     result = lxd.exec_shell(container, stage_cmd, check=False)
     return result.stdout
+
+
+_ERROR_RE = re.compile(r"\b(error|failed|fatal)\b", re.IGNORECASE)
+_ENV_VAR_RE = re.compile(r"^[A-Z_][A-Z0-9_]*=")
+
+
+def _first_error_line(log_tail: str) -> str:
+    """Return the first recognisable error line from a build log tail."""
+    for line in log_tail.splitlines():
+        if _ENV_VAR_RE.match(line):
+            continue
+        if _ERROR_RE.search(line):
+            return line.strip()[:200]
+    return log_tail.strip().splitlines()[-1][:200] if log_tail.strip() else ""
+
+
+def _last_build_error(history) -> str:
+    """Scan loop history for the last failed run_build error line."""
+    from .providers.base import Message
+    last = ""
+    for msg in history:
+        if msg.role != "tool":
+            continue
+        for r in msg.tool_results:
+            if r.name == "run_build" and not r.payload.get("ok"):
+                tail = r.payload.get("log_tail") or ""
+                line = _first_error_line(tail)
+                if line:
+                    last = line
+    return last

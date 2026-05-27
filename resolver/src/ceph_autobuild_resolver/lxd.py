@@ -153,6 +153,34 @@ class LXDManager:
                 f"copy {src}/{snapshot} -> {dst} failed: {exc}"
             ) from exc
 
+    def attach_disk_device(
+        self,
+        container: str,
+        device_name: str,
+        host_path: str,
+        container_path: str,
+    ) -> None:
+        """Bind-mount ``host_path`` into ``container`` at ``container_path``.
+
+        Idempotent: if the device already exists with the same source and path,
+        this is a no-op.  Replaces the device if only the paths changed.
+        """
+        try:
+            inst = self._instance(container)
+            existing = inst.devices.get(device_name, {})
+            if existing.get("source") == host_path and existing.get("path") == container_path:
+                return
+            inst.devices[device_name] = {
+                "type": "disk",
+                "source": host_path,
+                "path": container_path,
+            }
+            inst.save(wait=True)
+        except Exception as exc:  # noqa: BLE001
+            raise LXDError(
+                f"attach_disk_device {device_name!r} on {container!r} failed: {exc}"
+            ) from exc
+
     def delete(self, name: str, force: bool = True) -> None:
         try:
             inst = self._get_client().instances.get(name)

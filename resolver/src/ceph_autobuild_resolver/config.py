@@ -49,6 +49,10 @@ class Config:
     reasoning_effort: str | None = None
     reasoning_max_tokens: int | None = None
 
+    # ccache: if set, this host directory is bind-mounted into containers as
+    # /root/ccache and used as CCACHE_DIR during builds.  None = ccache disabled.
+    ccache_host_dir: str | None = None
+
     # Working paths inside the container
     container_workdir: str = "/root/ceph"
     container_log_dir: str = "/root/build-logs"
@@ -107,4 +111,5 @@ def load() -> Config:
         ceph_version=os.environ.get("CEPH_VERSION", "20.2.0"),
         reasoning_effort=effort,
         reasoning_max_tokens=max_thinking,
+        ccache_host_dir=os.environ.get("CCACHE_HOST_DIR") or None,
     )

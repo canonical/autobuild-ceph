@@ -148,8 +148,6 @@ def cfg() -> Config:
         provider="openrouter",
         model_name="test-model",
         api_key="test-key",
-        max_input_tokens=1000,
-        max_output_tokens=1000,
         max_iterations=5,
         max_unchanged_iterations=2,
         run_token_budget=10_000,

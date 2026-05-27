@@ -12,6 +12,7 @@ that snapshot for both iteration containers and the validation rebuild.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 from .build_runner import BuildRunner
@@ -53,6 +54,10 @@ def run(
     else:
         log.info("reusing existing container %s", container)
 
+    if cfg.ccache_host_dir and _prepare_ccache_dir(cfg.ccache_host_dir):
+        log.info("attaching ccache host dir %s -> /root/ccache", cfg.ccache_host_dir)
+        lxd.attach_disk_device(container, "ccache", cfg.ccache_host_dir, "/root/ccache")
+
     log.info("install_dependencies")
     res = runner.install_dependencies(container)
     if not res.ok:
@@ -75,6 +80,45 @@ def run(
     lxd.snapshot(container, snapshot)
 
     return PrepOutcome(container=container, snapshot=snapshot, image=image)
+
+
+def _prepare_ccache_dir(host_path: str) -> bool:
+    """Create and permission the ccache host directory.
+
+    LXD maps the container's root user to a different host UID (typically
+    100000 on Ubuntu).  Making the directory world-writable (1777) lets the
+    container root write cache entries without requiring knowledge of the
+    host's UID map.
+
+    Returns False if the directory cannot be created or made writable, in
+    which case the caller should skip ccache rather than aborting.
+    """
+    try:
+        os.makedirs(host_path, exist_ok=True)
+    except OSError as exc:
+        log.warning(
+            "ccache disabled: could not create host dir %r: %s — "
+            "create it manually (sudo install -d -m 1777 %s) or choose a "
+            "user-writable path",
+            host_path, exc, host_path,
+        )
+        return False
+
+    # Ensure world-writable so the LXD-mapped container root can write.
+    # Skip chmod if the directory already has the write bit for others.
+    mode = os.stat(host_path).st_mode
+    if not (mode & 0o002):
+        try:
+            os.chmod(host_path, 0o1777)
+        except OSError as exc:
+            log.warning(
+                "ccache disabled: %r exists but is not world-writable and "
+                "chmod failed: %s — run: sudo chmod 1777 %s",
+                host_path, exc, host_path,
+            )
+            return False
+
+    return True
 
 
 def _container_exists(lxd: LXDManager, name: str) -> bool:

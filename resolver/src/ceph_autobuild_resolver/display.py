@@ -22,6 +22,18 @@ _c = Console(stderr=True, highlight=False)
 # ---------------------------------------------------------------------------
 
 
+def startup_info(model: str, provider: str, ccache_host_dir: str | None) -> None:
+    ccache = (
+        f"[bold green]enabled[/bold green] ({ccache_host_dir})"
+        if ccache_host_dir
+        else "[dim]disabled[/dim]"
+    )
+    _c.print(
+        f"  [bold]provider[/bold] {provider} · [bold]model[/bold] {model} · "
+        f"[bold]ccache[/bold] {ccache}"
+    )
+
+
 def stage_header(name: str) -> None:
     _c.rule(f"[bold white]{name}[/bold white]")
 
@@ -148,6 +160,129 @@ def build_result(ok: bool, stage: str, log_tail: str) -> None:
             border_style=color,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# End-of-run summary
+# ---------------------------------------------------------------------------
+
+
+def run_summary(
+    *,
+    success: bool,
+    stop_reason: str,
+    iterations: int,
+    total_tokens: int,
+    elapsed_seconds: float,
+    initial_error: str,
+    resolution_summary: str | None,
+    diff: str,
+    last_build_error: str = "",
+) -> None:
+    """Print a structured end-of-run summary to stderr."""
+    elapsed = _fmt_elapsed(elapsed_seconds)
+    tok = f"{total_tokens / 1_000_000:.1f}M" if total_tokens >= 1_000_000 else f"{total_tokens:,}"
+    stats = f"{iterations} iter · {tok} tokens · {elapsed}"
+
+    if success:
+        title = f"[bold green]RESOLVED[/bold green]  ({stats})"
+        color = "green"
+    else:
+        title = f"[bold red]FAILED — {stop_reason}[/bold red]  ({stats})"
+        color = "red"
+
+    lines: list[str] = []
+
+    # Initial failure
+    if initial_error:
+        lines.append("[bold]Initial error:[/bold]")
+        for ln in initial_error.splitlines()[:3]:
+            lines.append(f"  {ln.strip()}")
+        lines.append("")
+
+    # Patch-level changes parsed from the diff
+    patch_changes = _parse_patch_changes(diff)
+    if patch_changes:
+        lines.append("[bold]Patch changes:[/bold]")
+        for status, name in patch_changes:
+            icon, style = {
+                "added":    ("+", "green"),
+                "dropped":  ("-", "red"),
+                "modified": ("~", "yellow"),
+            }[status]
+            lines.append(f"  [{style}]{icon} {name}[/{style}]")
+        lines.append("")
+    elif success:
+        lines.append("[dim]No patch changes.[/dim]\n")
+
+    # Model's explanation
+    if resolution_summary:
+        lines.append("[bold]Model explanation:[/bold]")
+        for ln in resolution_summary.strip().splitlines()[:20]:
+            lines.append(f"  {ln}")
+        lines.append("")
+
+    # On failure: last known error
+    if not success and last_build_error:
+        lines.append("[bold]Last build error:[/bold]")
+        lines.append(f"  {last_build_error.strip()[:200]}")
+
+    body = "\n".join(lines).rstrip()
+    _c.print(
+        Panel(
+            body,
+            title=title,
+            border_style=color,
+        )
+    )
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _parse_patch_changes(diff: str) -> list[tuple[str, str]]:
+    """Extract (status, patch_filename) for debian/patches/*.patch entries."""
+    import re
+    changes: list[tuple[str, str]] = []
+    current: str | None = None
+    is_new = is_del = False
+
+    for line in diff.splitlines():
+        m = re.match(r'^diff --git a/(.*) b/(.*)$', line)
+        if m:
+            if current:
+                changes.append((_classify(is_new, is_del), current))
+            path = m.group(2)
+            if "debian/patches/" in path and path.endswith(".patch"):
+                current = path.split("/")[-1]
+            else:
+                current = None
+            is_new = is_del = False
+            continue
+        if current:
+            if line.startswith("new file mode"):
+                is_new = True
+            elif line.startswith("deleted file mode"):
+                is_del = True
+
+    if current:
+        changes.append((_classify(is_new, is_del), current))
+
+    return changes
+
+
+def _classify(is_new: bool, is_del: bool) -> str:
+    if is_new:
+        return "added"
+    if is_del:
+        return "dropped"
+    return "modified"
 
 
 # ---------------------------------------------------------------------------

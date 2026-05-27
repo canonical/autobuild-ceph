@@ -5,8 +5,16 @@ import pytest
 from ceph_autobuild_resolver import config
 
 
-def test_load_defaults_to_openrouter(monkeypatch):
+def test_load_defaults_to_gemini(monkeypatch):
     monkeypatch.delenv("MODEL_PROVIDER", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gm-test")
+    cfg = config.load()
+    assert cfg.provider == "gemini"
+    assert cfg.api_key == "gm-test"
+
+
+def test_load_openrouter_explicit(monkeypatch):
+    monkeypatch.setenv("MODEL_PROVIDER", "openrouter")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     cfg = config.load()
     assert cfg.provider == "openrouter"

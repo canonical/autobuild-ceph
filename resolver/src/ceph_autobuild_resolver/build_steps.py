@@ -57,6 +57,20 @@ def install_dependencies_stage(cfg: Config) -> Stage:
                 ],
                 workdir="/root",
             ),
+            *(
+                [
+                    Step(
+                        [
+                            "bash",
+                            "-c",
+                            "DEBIAN_FRONTEND=noninteractive sudo apt install -y ccache",
+                        ],
+                        workdir="/root",
+                    )
+                ]
+                if cfg.ccache_host_dir
+                else []
+            ),
         ],
     )
 
@@ -220,8 +234,28 @@ def build_stage(cfg: Config) -> Stage:
                 workdir=cfg.container_workdir,
             ),
             Step(
-                ["bash", "-c", "debuild --no-lintian -us -uc -d -b -j$(nproc)"],
+                [
+                    "bash",
+                    "-c",
+                    _debuild_cmd(cfg),
+                ],
                 workdir=cfg.container_workdir,
             ),
         ],
+    )
+
+
+_CONTAINER_CCACHE_DIR = "/root/ccache"
+
+
+def _debuild_cmd(cfg: Config) -> str:
+    base = "debuild --no-lintian -us -uc -d -b -j$(nproc)"
+    if not cfg.ccache_host_dir:
+        return base
+    return (
+        f"PATH=/usr/lib/ccache:$PATH "
+        f"CCACHE_DIR={_CONTAINER_CCACHE_DIR} "
+        f"CCACHE_BASEDIR={cfg.container_workdir} "
+        f"CCACHE_MAXSIZE=20G "
+        f"{base}"
     )

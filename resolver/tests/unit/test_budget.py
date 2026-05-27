@@ -14,9 +14,9 @@ def test_iteration_cap_trips_has_capacity(cfg):
 
 def test_token_cap_trips_has_capacity(cfg):
     budget = Budget.from_config(cfg)
-    budget.record_usage(Usage(input_tokens=cfg.max_input_tokens, output_tokens=0))
+    budget.record_usage(Usage(input_tokens=cfg.run_token_budget, output_tokens=0))
     assert not budget.has_capacity()
-    assert budget.reason_for_stop() == "max_input_tokens"
+    assert budget.reason_for_stop() == "token_budget_exceeded"
 
 
 def test_unchanged_streak_trips(cfg):

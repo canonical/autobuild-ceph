@@ -19,10 +19,15 @@ def _cfg(cfg) -> Config:
 
 
 def _flat(stage) -> list[str]:
-    """Flatten all argv entries from a stage into one list for easy searching."""
+    """Flatten all argv entries from a stage into one list for easy searching.
+
+    bash -c '...' steps are split by whitespace so their embedded commands are
+    searchable the same way as plain argv entries.
+    """
     result = []
     for step in stage.steps:
-        result.extend(step.argv)
+        for token in step.argv:
+            result.extend(token.split())
     return result
 
 
