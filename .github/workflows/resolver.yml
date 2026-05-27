@@ -52,11 +52,11 @@ jobs:
             ubuntu_branch: ubuntu/resolute
             debian_ref: origin/ubuntu/latest
             ceph_version: 20.2.0
-          - name: noble
-            lxd_image: ubuntu:24.04
-            ubuntu_branch: ubuntu/noble
-            debian_ref: origin/ubuntu/noble
-            ceph_version: 19.2.3
+#          - name: noble
+#            lxd_image: ubuntu:24.04
+#            ubuntu_branch: ubuntu/noble
+#            debian_ref: origin/ubuntu/noble
+#            ceph_version: 19.2.3
 
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
