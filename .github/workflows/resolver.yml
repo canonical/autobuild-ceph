@@ -1,0 +1,138 @@
+name: AI Resolver
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_provider:
+        description: "Model provider (gemini or openrouter)"
+        default: "gemini"
+        required: false
+      model_name:
+        description: "Model ID (Gemini or OpenRouter)"
+        default: "gemini-3.1-pro-preview"
+        required: false
+      max_iterations:
+        description: "Maximum resolver iterations"
+        default: "1000"
+        required: false
+      run_token_budget:
+        description: "Total token budget for the run"
+        default: "64000000"
+        required: false
+      launchpad_owner:
+        description: Launchpad owner namespace for the ceph source repo
+        required: false
+        default: lmlogiudice
+  schedule:
+    - cron: '0 5 * * 1'  # Weekly on Mondays at 05:00 UTC
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  resolve:
+    name: AI resolver (${{ matrix.name }})
+    # Gate which events run on the self-hosted runner. The pull_request clause
+    # requires the PR's head repo to equal this repo, i.e. the branch lives in
+    # this repo, not a fork — fork PRs (untrusted code) never reach the runner.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted-linux-amd64-noble-xlarge]
+    environment: Autobuild
+    timeout-minutes: 720
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: resolute
+            lxd_image: ubuntu-daily:resolute
+            ubuntu_branch: ubuntu/resolute
+            debian_ref: origin/ubuntu/latest
+            ceph_version: 20.2.0
+          - name: noble
+            lxd_image: ubuntu:24.04
+            ubuntu_branch: ubuntu/noble
+            debian_ref: origin/ubuntu/noble
+            ceph_version: 19.2.3
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # Model / budget knobs — workflow_dispatch inputs take precedence, then
+      # repo-level Actions variables, then hard-coded defaults.
+      MODEL_PROVIDER: ${{ github.event.inputs.model_provider || vars.RESOLVER_MODEL_PROVIDER || 'gemini' }}
+      MODEL_NAME: ${{ github.event.inputs.model_name || vars.RESOLVER_MODEL_NAME || 'gemini-3.1-pro-preview' }}
+      MAX_ITERATIONS: ${{ github.event.inputs.max_iterations || vars.RESOLVER_MAX_ITERATIONS || '1000' }}
+      MAX_UNCHANGED_ITERATIONS: "5"
+      MAX_WALL_SECONDS: "21600"
+      RUN_TOKEN_BUDGET: ${{ github.event.inputs.run_token_budget || '64000000' }}
+      # Build matrix — sourced from the strategy matrix above.
+      MATRIX_NAME: ${{ matrix.name }}
+      CEPH_VERSION: ${{ matrix.ceph_version }}
+      UBUNTU_BRANCH: ${{ matrix.ubuntu_branch }}
+      DEBIAN_REF: ${{ matrix.debian_ref }}
+      LAUNCHPAD_OWNER: ${{ github.event.inputs.launchpad_owner || 'lmlogiudice' }}
+      # ccache: persist compiled objects across resolver iterations and CI runs.
+      # The runner-local path is bind-mounted into each LXD container as /root/ccache.
+      CCACHE_HOST_DIR: /var/cache/ccache/ceph-${{ matrix.name }}
+      # Cache-size cap (ccache size syntax, e.g. 20G/5G/500M). Override via the
+      # RESOLVER_CCACHE_MAXSIZE repo Actions variable.
+      CCACHE_MAXSIZE: ${{ vars.RESOLVER_CCACHE_MAXSIZE || '20G' }}
+      # Write the diff to a separate file so the job log shows only the
+      # narrative; the raw patch is uploaded as a workflow artifact.
+      CI_DIFF_FILE: "${{ github.workspace }}/resolver-diff.patch"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: sudo snap install astral-uv --classic
+
+      - name: Install and initialize LXD
+        run: |
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo iptables -P FORWARD ACCEPT
+          sudo usermod -aG lxd "$USER"
+
+      - name: Prepare ccache directory
+        run: sudo install -d -m 1777 "$CCACHE_HOST_DIR"
+
+      - name: Run resolver
+        # sg lxd makes the lxd group effective for this step so pylxd can
+        # connect to the LXD unix socket without sudo.
+        run: |
+          sg lxd -c "bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
+
+      - name: ccache stats
+        if: always()
+        run: |
+          echo "=== ccache stats for $MATRIX_NAME ==="
+          if [ -d "$CCACHE_HOST_DIR" ]; then
+            du -sh "$CCACHE_HOST_DIR"
+            lxc exec ceph-build -- bash -c \
+              "CCACHE_DIR=/root/ccache ccache --print-stats 2>/dev/null" || true
+          else
+            echo "(cache dir not present)"
+          fi
+
+      - name: Upload resolver transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-transcript-${{ matrix.name }}
+          path: resolver/resolver-transcript.jsonl
+          if-no-files-found: ignore
+
+      - name: Upload diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-diff-${{ matrix.name }}
+          path: "${{ github.workspace }}/resolver-diff.patch"
+          if-no-files-found: ignore

@@ -1,0 +1,6 @@
+.idea
+.env
+*.pyc
+__pycache__
+*.egg-info/
+resolver/resolver-transcript.jsonl
