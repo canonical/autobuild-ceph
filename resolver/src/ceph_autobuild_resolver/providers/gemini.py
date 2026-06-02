@@ -15,11 +15,34 @@ import logging
 import uuid
 from typing import Any
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from .base import ROLE_MODEL, Message, ProviderAdapter, ToolCall, ToolSchema, Usage
+from .base import (
+    ROLE_MODEL,
+    ContextOverflowError,
+    Message,
+    ProviderAdapter,
+    ToolCall,
+    ToolSchema,
+    Usage,
+)
 
 log = logging.getLogger(__name__)
+
+# Substrings that mark a 400 as a per-request token-limit rejection (as opposed
+# to other INVALID_ARGUMENT causes like a malformed schema). Matched only as a
+# secondary gate behind the HTTP 400 code check, never on its own.
+_TOKEN_LIMIT_MARKERS = (
+    "exceeds the maximum number of tokens",
+    "input token count",
+    "exceeds the maximum",
+)
+
+
+def _is_token_limit_error(exc: genai_errors.ClientError) -> bool:
+    msg = (getattr(exc, "message", None) or str(exc) or "").lower()
+    return any(marker in msg for marker in _TOKEN_LIMIT_MARKERS)
 
 # finish_reason values that indicate the model stopped normally.
 _OK_FINISH_REASONS = frozenset({"STOP", "MAX_TOKENS", "FINISH_REASON_UNSPECIFIED"})
@@ -81,11 +104,22 @@ class GeminiAdapter(ProviderAdapter):
         )
 
         log.debug("gemini request: %d content turns", len(contents))
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=contents,
-            config=config,
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=contents,
+                config=config,
+            )
+        except genai_errors.ClientError as exc:
+            # A 400 whose message indicates the per-request token maximum was
+            # exceeded is a context-overflow we can stop cleanly on. Every
+            # other 400 (malformed schema, bad function args, ...) is a real
+            # error the caller must see -- re-raise unchanged.
+            if exc.code == 400 and _is_token_limit_error(exc):
+                raise ContextOverflowError(
+                    getattr(exc, "message", None) or str(exc)
+                ) from exc
+            raise
         return _from_response(response)
 
 

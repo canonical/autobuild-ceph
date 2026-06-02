@@ -20,7 +20,12 @@ from dataclasses import dataclass, field
 from . import display
 from .budget import Budget
 from .build_runner import first_error_line
-from .providers.base import ROLE_MODEL, Message, ProviderAdapter
+from .providers.base import (
+    ROLE_MODEL,
+    ContextOverflowError,
+    Message,
+    ProviderAdapter,
+)
 from .tools.dispatch import Dispatcher
 from .transcript import Transcript
 
@@ -171,7 +176,21 @@ def run_loop(
         _compress_history(history)
         budget.record_iteration()
 
-        reply, usage = provider.chat(history)
+        try:
+            reply, usage = provider.chat(history)
+        except ContextOverflowError as exc:
+            # A single request exceeded the provider's input-token limit. We
+            # can't recover by compressing: the offending message is the most
+            # recent one (inside the keep-recent window), so compression can't
+            # evict it and a retry would just overflow again. Stop cleanly so
+            # the orchestrator records the outcome instead of crashing.
+            log.error("context overflow from provider, stopping: %s", exc)
+            return LoopResult(
+                declared_resolved=False,
+                resolution_summary=None,
+                history=history,
+                stop_reason="context_overflow",
+            )
         budget.record_usage(usage)
         display.token_usage(budget.input_tokens_used, budget.output_tokens_used, budget.cfg.run_token_budget)
         transcript.model_turn(reply, usage)
@@ -209,7 +228,7 @@ def run_loop(
             # rather than silently dying without writing to the transcript.
             log.exception("dispatcher raised unexpectedly: %s", exc)
             from .providers.base import ToolResult
-            from .tools.dispatch import DispatchOutcome
+            from .tools.dispatch import DispatchOutcome, clamp_oversized_results
             synthetic_results = [
                 ToolResult(
                     call_id=tc.id,
@@ -218,6 +237,10 @@ def run_loop(
                 )
                 for tc in reply.tool_calls
             ]
+            # str(exc) is normally small, but this is the one result-append
+            # path outside dispatch(); run it through the same byte ceiling so
+            # a pathological exception message can't overflow the next request.
+            clamp_oversized_results(synthetic_results)
             outcome = DispatchOutcome(results=synthetic_results)
         transcript.tool_results(outcome.results)
         history.append(Message(role="tool", tool_results=outcome.results))
