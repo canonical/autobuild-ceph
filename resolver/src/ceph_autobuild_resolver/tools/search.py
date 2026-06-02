@@ -26,9 +26,22 @@ class SearchHandlers:
         max_matches: int | None = None,
         case_insensitive: bool = False,
     ) -> dict[str, Any]:
-        from .schema import DEFAULT_GREP_MATCHES
+        from .schema import (
+            DEFAULT_GREP_MATCHES,
+            HARD_MAX_MATCHES,
+            MAX_EXCERPT_CHARS,
+            MAX_FILES_LISTED,
+        )
 
-        max_matches = max_matches or DEFAULT_GREP_MATCHES
+        # Distinguish "omitted" (None -> default) from an explicit integer, so
+        # max_matches=0 means "just counts/files, no excerpts" rather than
+        # being coerced to the default. Then clamp into [0, HARD_MAX_MATCHES]:
+        # the ceiling stops a huge value reintroducing an unbounded payload,
+        # the floor stops a negative value turning the slice below into a
+        # nonsensical matches[offset:offset-n].
+        if max_matches is None:
+            max_matches = DEFAULT_GREP_MATCHES
+        max_matches = max(0, min(max_matches, HARD_MAX_MATCHES))
 
         # Normalise path: if the model passes an absolute container path
         # (e.g. "/root/ceph/CMakeLists.txt") strip the workdir prefix so we
@@ -77,19 +90,41 @@ class SearchHandlers:
                 lineno = int(lineno_str)
             except ValueError:
                 continue
+            # Truncate the excerpt so a single huge (e.g. minified) line can't
+            # bloat an otherwise-capped page.
+            if len(excerpt) > MAX_EXCERPT_CHARS:
+                excerpt = excerpt[:MAX_EXCERPT_CHARS] + " ...[excerpt truncated]"
             matches.append({"path": p, "line": lineno, "excerpt": excerpt})
 
         total = len(matches)
         page = matches[match_offset : match_offset + max_matches]
-        return {
+
+        # Bound files_with_matches: a broad pattern can match tens of thousands
+        # of files, and returning the full list overflows the provider's
+        # per-request token limit. Cap the list, report the true total, and
+        # signal truncation so the model narrows its pattern rather than paging.
+        all_files = sorted(files_with_matches)
+        files_truncated = len(all_files) > MAX_FILES_LISTED
+        result: dict[str, Any] = {
             "pattern": pattern,
             "matches": page,
             "match_offset": match_offset,
             "matches_returned": len(page),
             "total_matches": total,
-            "files_with_matches": sorted(files_with_matches),
-            "truncated": match_offset + len(page) < total,
+            # Only meaningful when excerpts were actually requested: with
+            # max_matches=0 the empty page is intentional, not a truncation.
+            "truncated": max_matches > 0 and match_offset + len(page) < total,
+            "files_with_matches": all_files[:MAX_FILES_LISTED],
+            "total_files": len(all_files),
+            "files_truncated": files_truncated,
         }
+        if files_truncated:
+            result["hint"] = (
+                f"{len(all_files)} files matched but only the first "
+                f"{MAX_FILES_LISTED} are listed. Narrow your pattern or pass a "
+                "more specific path instead of paging the whole list."
+            )
+        return result
 
     def git_log(
         self,
