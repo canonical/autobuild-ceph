@@ -28,13 +28,17 @@ def test_unchanged_streak_trips(cfg):
     assert budget.reason_for_stop() == "no_progress"
 
 
-def test_failure_with_file_change_resets_streak(cfg):
+def test_build_after_file_change_resets_streak_fully(cfg):
+    # reset_unchanged_streak zeroes the streak completely, so it must
+    # re-accumulate from scratch rather than tripping no_progress on the next
+    # unchanged build. cfg fixture sets max_unchanged_iterations=2.
     budget = Budget.from_config(cfg)
     budget.record_unchanged_build()
-    # A build failure that followed a file change resets the streak.
-    budget.record_failure()
-    assert budget.unchanged_streak == 0
+    budget.reset_unchanged_streak()
+    budget.record_unchanged_build()
+    assert budget.unchanged_streak == 1
     assert budget.has_capacity()
+    assert budget.reason_for_stop() == "ok"
 
 
 def test_explicit_streak_reset(cfg):

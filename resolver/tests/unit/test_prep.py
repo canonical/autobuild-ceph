@@ -41,25 +41,14 @@ class StubLXD:
     def put_text(self, container, remote_path, content) -> None:
         pass
 
-    def _instance(self, name):
-        if not self.container_exists:
-            raise LXDError(f"no such container: {name}")
-        outer = self
+    def exists(self, name: str) -> bool:
+        return self.container_exists
 
-        class _Snapshots:
-            def get(self, snap_name):
-                if not outer.snapshot_exists:
-                    raise RuntimeError("not found")
-                class _Snap:
-                    def delete(self, wait=True):
-                        outer.snapshots_deleted.append((name, snap_name))
-                        outer.snapshot_exists = False
-                return _Snap()
-
-        class _Inst:
-            snapshots = _Snapshots()
-
-        return _Inst()
+    def delete_snapshot(self, container: str, snapshot: str) -> None:
+        # Mirror LXDManager.delete_snapshot: delete if present, no-op otherwise.
+        if self.snapshot_exists:
+            self.snapshots_deleted.append((container, snapshot))
+            self.snapshot_exists = False
 
 
 def test_prep_launches_when_missing(cfg):
