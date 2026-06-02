@@ -184,6 +184,103 @@ def test_loop_terminates_quickly_on_repeated_refused_builds(fake_lxd, cfg, tmp_p
     assert budget.iterations_used <= cfg.max_unchanged_iterations + 1
 
 
+def test_loop_exits_clean_on_context_overflow(fake_lxd, cfg, tmp_path):
+    """A ContextOverflowError from the provider must stop the loop cleanly
+    with stop_reason='context_overflow' -- no exception escapes, and there is
+    NO retry (compression can't evict the offending last message, so a retry
+    would just overflow again)."""
+    from ceph_autobuild_resolver.providers.base import ContextOverflowError
+
+    class OverflowProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def declare_tools(self, tools):
+            pass
+
+        def chat(self, history):
+            self.calls += 1
+            raise ContextOverflowError(
+                "input token count exceeds the maximum number of tokens allowed 1048576"
+            )
+
+    provider = OverflowProvider()
+    dispatcher = _build_dispatcher(fake_lxd, cfg)
+    budget = Budget.from_config(cfg)
+    transcript = Transcript(tmp_path / "t.jsonl")
+
+    result = run_loop(
+        history=[Message(role="user", text="go")],
+        provider=provider,
+        dispatcher=dispatcher,
+        budget=budget,
+        transcript=transcript,
+    )
+
+    assert result.declared_resolved is False
+    assert result.stop_reason == "context_overflow"
+    assert provider.calls == 1  # no retry
+
+
+def test_loop_clamps_oversized_dispatcher_crash_payload(
+    fake_lxd, cfg, tmp_path, monkeypatch
+):
+    """If the dispatcher itself raises with a huge message, the synthetic
+    crash result must still go through the byte ceiling -- this is the one
+    result-append path outside dispatch()."""
+    from ceph_autobuild_resolver.tools.dispatch import MAX_PAYLOAD_BYTES
+
+    provider = ScriptedProvider(
+        [
+            Message(
+                role="model",
+                tool_calls=[ToolCall(id="c1", name="grep", args={"pattern": "x"})],
+            ),
+            Message(
+                role="model",
+                tool_calls=[
+                    ToolCall(id="c2", name="declare_resolved", args={"summary": "ok"})
+                ],
+            ),
+        ]
+    )
+    dispatcher = _build_dispatcher(fake_lxd, cfg)
+
+    calls = {"n": 0}
+    real_dispatch = dispatcher.dispatch
+
+    def boom_once(tool_calls):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("x" * (MAX_PAYLOAD_BYTES + 1024))
+        return real_dispatch(tool_calls)
+
+    monkeypatch.setattr(dispatcher, "dispatch", boom_once)
+    budget = Budget.from_config(cfg)
+    transcript = Transcript(tmp_path / "t.jsonl")
+
+    result = run_loop(
+        history=[Message(role="user", text="go")],
+        provider=provider,
+        dispatcher=dispatcher,
+        budget=budget,
+        transcript=transcript,
+    )
+
+    payloads = [
+        r.payload
+        for m in result.history
+        if m.role == "tool"
+        for r in m.tool_results
+    ]
+    # The crash payload was oversized and must have been clamped to the stub.
+    assert any(p.get("error") == "result_truncated" for p in payloads)
+    assert not any(
+        p.get("error") == "dispatcher_crash" and p.get("total_bytes") is None
+        for p in payloads
+    )
+
+
 def test_loop_records_transcript(fake_lxd, cfg, tmp_path):
     provider = ScriptedProvider(
         [

@@ -43,6 +43,16 @@ ROLE_MODEL = "model"
 Role = Literal["system", "user", "model", "tool"]
 
 
+class ContextOverflowError(Exception):
+    """A single request exceeded the provider's per-request input-token limit.
+
+    Provider-neutral signal: each adapter translates its own "request too
+    large" failure (e.g. Gemini's 400 INVALID_ARGUMENT token-count rejection)
+    into this exception so the resolution loop can react -- by stopping
+    cleanly -- without importing or catching provider-specific SDK errors.
+    """
+
+
 @dataclass
 class ToolCall:
     """A single function/tool invocation produced by the model.
