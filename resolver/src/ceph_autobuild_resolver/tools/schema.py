@@ -17,6 +17,14 @@ DEFAULT_GREP_MATCHES = 50
 DEFAULT_LOG_BYTES = 65_536
 DEFAULT_GIT_LOG_ENTRIES = 20
 
+# Hard caps that bound the size of a grep payload regardless of what the model
+# asks for. A broad pattern (e.g. '#include' across the Ceph tree) would
+# otherwise return a files_with_matches list of tens of thousands of paths and
+# overflow the provider's per-request input-token limit. See the grep handler.
+HARD_MAX_MATCHES = 200  # ceiling on returned match entries, even if asked for more
+MAX_FILES_LISTED = 100  # ceiling on the files_with_matches list
+MAX_EXCERPT_CHARS = 500  # per-match excerpt is truncated to this many chars
+
 
 def all_tools() -> list[ToolSchema]:
     return [
@@ -231,9 +239,13 @@ def _grep() -> ToolSchema:
         name="grep",
         description=(
             f"Search the working tree. Returns up to {DEFAULT_GREP_MATCHES} "
-            "matches with surrounding excerpt; full files_with_matches list "
-            "is always included so you can read_files directly even when "
-            "match excerpts are truncated."
+            f"matches (hard cap {HARD_MAX_MATCHES}) with a truncated excerpt, "
+            f"and up to {MAX_FILES_LISTED} matching file paths in "
+            "files_with_matches. The response includes total_matches and "
+            "total_files (the true counts); when files_truncated is true the "
+            "file list was capped -- do NOT try to page the whole list, "
+            "instead narrow your pattern or pass a more specific path. Use "
+            "match_offset to page through match excerpts."
         ),
         parameters={
             "type": "object",
@@ -250,7 +262,10 @@ def _grep() -> ToolSchema:
                 "max_matches": {
                     "type": "integer",
                     "description": (
-                        f"Cap returned matches; default {DEFAULT_GREP_MATCHES}."
+                        f"Cap returned match excerpts; default "
+                        f"{DEFAULT_GREP_MATCHES}, clamped to a hard maximum of "
+                        f"{HARD_MAX_MATCHES}. Pass 0 to get total_matches and "
+                        "files_with_matches without any excerpts."
                     ),
                 },
                 "case_insensitive": {"type": "boolean"},
