@@ -21,6 +21,7 @@ just hang the loop.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -32,6 +33,64 @@ from .filesystem import FilesystemHandlers
 from .search import SearchHandlers
 
 log = logging.getLogger(__name__)
+
+# Defense in depth: no single tool result may exceed this many bytes once
+# JSON-serialised. Even with every handler bounding its own output, a future
+# tool (or an unforeseen broad query) must not be able to overflow the
+# provider's per-request input-token limit. ~256 KB is roughly 64K tokens --
+# comfortably under the 1,048,576-token request ceiling.
+MAX_PAYLOAD_BYTES = 256 * 1024
+
+
+def _payload_bytes(payload: Any) -> int:
+    """Serialised size of a payload, as the wire form the adapter will send.
+
+    Falls back to ``str`` length if the payload isn't JSON-serialisable so the
+    safety net itself can never raise.
+    """
+    try:
+        return len(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        return len(str(payload))
+
+
+def clamp_oversized_results(results: list[ToolResult]) -> None:
+    """Replace any over-budget tool payload with a truncation stub, in place.
+
+    Runs as a single pass over every result the dispatcher produced -- covering
+    all append branches (handler, malformed-args echo, unknown tool, terminal
+    calls), not just the common handler path. Runs after the per-call
+    bookkeeping in ``dispatch`` (e.g. the _FILE_MUTATORS ``ok`` check), so
+    clamping a result here cannot retroactively affect that state.
+    """
+    for r in results:
+        size = _payload_bytes(r.payload)
+        if size <= MAX_PAYLOAD_BYTES:
+            continue
+        # Preserve a couple of small scalar keys so the model retains the most
+        # useful signal (did it succeed, what path) even after truncation.
+        preserved = {
+            k: v
+            for k, v in (r.payload.items() if isinstance(r.payload, dict) else [])
+            if k in ("ok", "path") and isinstance(v, (str, int, float, bool))
+        }
+        log.warning(
+            "clamped oversized %s result: %d bytes > %d limit",
+            r.name,
+            size,
+            MAX_PAYLOAD_BYTES,
+        )
+        r.payload = {
+            "error": "result_truncated",
+            "total_bytes": size,
+            "message": (
+                f"This {r.name} result was {size} bytes, exceeding the "
+                f"{MAX_PAYLOAD_BYTES}-byte limit, and was dropped to avoid "
+                "overflowing the model context. Re-issue a narrower query: a "
+                "more specific pattern or path, or a smaller range."
+            ),
+            **preserved,
+        }
 
 
 @dataclass
@@ -205,6 +264,11 @@ class Dispatcher:
             results.append(
                 ToolResult(call_id=call.id, name=call.name, payload=payload)
             )
+
+        # Final safety net: clamp any result whose serialised payload would
+        # blow the provider's per-request token budget. Runs after the loop so
+        # all per-call bookkeeping above has already observed the real payload.
+        clamp_oversized_results(results)
 
         return DispatchOutcome(
             results=results,

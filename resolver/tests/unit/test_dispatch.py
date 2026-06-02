@@ -135,6 +135,64 @@ def test_grep_log_routed_with_injected_log_path(dispatcher, fake_lxd):
     assert "CMake Error: bad" in payload.get("output", "")
 
 
+def test_oversized_handler_result_is_clamped(dispatcher):
+    """Any handler payload over the byte ceiling is replaced with a stub."""
+    from ceph_autobuild_resolver.tools.dispatch import MAX_PAYLOAD_BYTES
+
+    dispatcher._handlers["grep"] = lambda **kw: {
+        "matches": "x" * (MAX_PAYLOAD_BYTES + 1024)
+    }
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="grep", args={"pattern": "p"})]
+    )
+    p = outcome.results[0].payload
+    assert p["error"] == "result_truncated"
+    assert p["total_bytes"] > MAX_PAYLOAD_BYTES
+
+
+def test_oversized_non_handler_branch_is_clamped(dispatcher):
+    """The clamp covers branches that bypass the handler path -- here the
+    malformed-args echo, which reflects the raw model blob back."""
+    from ceph_autobuild_resolver.tools.dispatch import MAX_PAYLOAD_BYTES
+
+    huge = "{" + "x" * (MAX_PAYLOAD_BYTES + 1024)
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="grep", args={"__malformed_arguments__": huge})]
+    )
+    p = outcome.results[0].payload
+    assert p["error"] == "result_truncated"
+
+
+def test_oversized_mutator_result_preserves_files_changed(dispatcher):
+    """Clamping a large *successful* mutator payload must not undo the
+    files_changed bookkeeping, which runs before the post-loop clamp."""
+    from ceph_autobuild_resolver.tools.dispatch import MAX_PAYLOAD_BYTES
+
+    dispatcher._handlers["write_file"] = lambda **kw: {
+        "ok": True,
+        "path": kw.get("path"),
+        "blob": "x" * (MAX_PAYLOAD_BYTES + 1024),
+    }
+    dispatcher._execution.files_changed_since_last_build = False
+
+    outcome = dispatcher.dispatch(
+        [
+            ToolCall(
+                id="c1",
+                name="write_file",
+                args={"path": "debian/foo", "content": "y"},
+            )
+        ]
+    )
+    # Bookkeeping observed the real ok=True payload before truncation.
+    assert dispatcher.files_changed is True
+    p = outcome.results[0].payload
+    assert p["error"] == "result_truncated"
+    # Small scalar keys are preserved for the model's benefit.
+    assert p["ok"] is True
+    assert p["path"] == "debian/foo"
+
+
 def test_declare_resolved_signals_termination(dispatcher):
     outcome = dispatcher.dispatch(
         [
