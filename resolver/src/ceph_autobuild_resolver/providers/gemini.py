@@ -33,10 +33,12 @@ log = logging.getLogger(__name__)
 # Substrings that mark a 400 as a per-request token-limit rejection (as opposed
 # to other INVALID_ARGUMENT causes like a malformed schema). Matched only as a
 # secondary gate behind the HTTP 400 code check, never on its own.
+# Deliberately narrow: only token-count phrasings. A broad substring like
+# "exceeds the maximum" also matches unrelated 400s (parameter range
+# messages), which would turn a real bug into a silent clean stop.
 _TOKEN_LIMIT_MARKERS = (
     "exceeds the maximum number of tokens",
     "input token count",
-    "exceeds the maximum",
 )
 
 
@@ -151,7 +153,13 @@ def _to_content(msg: Message) -> types.Content:
     if msg.role == "model":
         parts: list[types.Part] = []
         if msg.text:
-            parts.append(types.Part.from_text(text=msg.text))
+            # Echo back any signature that arrived on the text part; Gemini
+            # requires signatures wherever they appeared, not only on
+            # function-call parts.
+            parts.append(types.Part(
+                text=msg.text,
+                thought_signature=msg.thought_signature,
+            ))
         for tc in msg.tool_calls:
             # Thinking models attach an opaque thought_signature to each
             # function_call Part.  The API rejects the next turn if it's absent.
@@ -166,8 +174,34 @@ def _to_content(msg: Message) -> types.Content:
     return types.Content(role="user", parts=[types.Part.from_text(text=msg.text or "")])
 
 
+def _usage_from(response: Any) -> Usage:
+    """Token accounting from usage_metadata.
+
+    Present even on blocked / candidate-less responses — the API still
+    consumed prompt tokens, so the run budget must count them.
+    """
+    meta = getattr(response, "usage_metadata", None)
+    if not meta:
+        return Usage(input_tokens=0, output_tokens=0)
+    # thoughts_token_count covers chain-of-thought tokens (2.5 Pro+) which
+    # are not included in candidates_token_count.
+    output_tokens = int(meta.candidates_token_count or 0) + int(getattr(meta, "thoughts_token_count", None) or 0)
+    return Usage(input_tokens=int(meta.prompt_token_count or 0), output_tokens=output_tokens)
+
+
 def _from_response(response: Any) -> tuple[Message, Usage]:
     """Parse a Gemini GenerateContentResponse into canonical reply + usage."""
+    if not response.candidates:
+        # A prompt-blocked (safety-filtered) response has no candidates at
+        # all. Surface it as a recoverable empty turn rather than crashing
+        # the run on candidates[0].
+        feedback = getattr(response, "prompt_feedback", None)
+        log.error("gemini returned no candidates (prompt_feedback=%s)", feedback)
+        return Message(
+            role=ROLE_MODEL,
+            text=f"[BLOCKED: response had no candidates; prompt_feedback={feedback}]",
+        ), _usage_from(response)
+
     candidate = response.candidates[0]
 
     finish = str(candidate.finish_reason.name) if candidate.finish_reason else "UNKNOWN"
@@ -179,12 +213,13 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
         return Message(
             role=ROLE_MODEL,
             text=f"[BLOCKED: finish_reason={finish}]",
-        ), Usage(input_tokens=0, output_tokens=0)
+        ), _usage_from(response)
 
     parts = candidate.content.parts if candidate.content else []
     text_parts: list[str] = []
     thought_parts: list[str] = []
     tool_calls: list[ToolCall] = []
+    text_thought_sig: bytes | None = None
 
     for part in parts:
         if part.function_call:
@@ -200,26 +235,23 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
             # FunctionCall) that must be echoed back in the next request.
             thought_sig = part.thought_signature or None
             tool_calls.append(ToolCall(id=call_id, name=fc.name, args=args, thought_signature=thought_sig))
-        elif part.text and part.thought:
-            thought_parts.append(part.text)
-        elif part.text:
-            text_parts.append(part.text)
-
-    meta = response.usage_metadata
-    if meta:
-        # thoughts_token_count covers chain-of-thought tokens (2.5 Pro+) which
-        # are not included in candidates_token_count.
-        output_tokens = int(meta.candidates_token_count or 0) + int(getattr(meta, "thoughts_token_count", None) or 0)
-        input_tokens = int(meta.prompt_token_count or 0)
-    else:
-        input_tokens = output_tokens = 0
+        else:
+            # Signatures can arrive on text/thought parts too, and Gemini
+            # requires them echoed back wherever they appeared.
+            if part.thought_signature and text_thought_sig is None:
+                text_thought_sig = part.thought_signature
+            if part.text and part.thought:
+                thought_parts.append(part.text)
+            elif part.text:
+                text_parts.append(part.text)
 
     return Message(
         role=ROLE_MODEL,
         text="\n".join(text_parts) or None,
         reasoning="\n".join(thought_parts) or None,
+        thought_signature=text_thought_sig,
         tool_calls=tool_calls,
-    ), Usage(input_tokens=input_tokens, output_tokens=output_tokens)
+    ), _usage_from(response)
 
 
 def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:

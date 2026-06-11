@@ -64,3 +64,58 @@ def test_client_configured_with_retries():
     adapter = GeminiAdapter(api_key="x", model="gemini-test")
     retry_options = adapter._client._api_client._http_options.retry_options
     assert retry_options is not None
+
+
+# ---------------------------------------------------------------------------
+# Response parsing robustness
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace as _NS
+
+from ceph_autobuild_resolver.providers.gemini import _from_response
+
+
+def _meta(prompt=100, cand=5, thoughts=0):
+    return _NS(
+        candidates_token_count=cand,
+        prompt_token_count=prompt,
+        thoughts_token_count=thoughts,
+    )
+
+
+def test_from_response_handles_no_candidates():
+    """A prompt-blocked response has no candidates at all; it must come back
+    as a recoverable [BLOCKED] turn, not an IndexError."""
+    resp = _NS(
+        candidates=[],
+        prompt_feedback="BLOCK_REASON_SAFETY",
+        usage_metadata=_meta(prompt=1234, cand=0),
+    )
+    msg, usage = _from_response(resp)
+    assert "[BLOCKED" in msg.text
+    assert "SAFETY" in msg.text
+    assert usage.input_tokens == 1234
+
+
+def test_blocked_finish_reason_still_counts_usage():
+    cand = _NS(finish_reason=_NS(name="SAFETY"), content=None)
+    resp = _NS(candidates=[cand], usage_metadata=_meta(prompt=50, cand=0))
+    msg, usage = _from_response(resp)
+    assert "[BLOCKED" in msg.text
+    assert usage.input_tokens == 50
+
+
+def test_text_part_thought_signature_preserved():
+    part = _NS(function_call=None, text="hello", thought=False, thought_signature=b"sig")
+    cand = _NS(finish_reason=_NS(name="STOP"), content=_NS(parts=[part]))
+    resp = _NS(candidates=[cand], usage_metadata=_meta())
+    msg, _usage = _from_response(resp)
+    assert msg.text == "hello"
+    assert msg.thought_signature == b"sig"
+
+
+def test_overflow_marker_ignores_unrelated_maximum_phrasings():
+    exc = _client_error(
+        400, "Value exceeds the maximum allowed range for parameter temperature."
+    )
+    assert _is_token_limit_error(exc) is False
