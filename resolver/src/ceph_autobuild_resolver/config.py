@@ -39,7 +39,9 @@ class Config:
     max_iterations: int
     max_unchanged_iterations: int
 
-    # Cross-matrix (per CI run) cap. Tracked but enforced by the caller.
+    # Per-process token cap, enforced by Budget between iterations. Each
+    # matrix job is a separate process with its own budget; nothing enforces
+    # a cross-matrix total.
     run_token_budget: int
 
     # Build matrix knobs (mirrored from build.sh)

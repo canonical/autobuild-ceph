@@ -71,7 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     res_p.add_argument(
         "--dry-run-output",
         action="store_true",
-        help="Print PR/bug payload to stderr instead of contacting Launchpad.",
+        help="Print the PR/bug payload to stdout instead of contacting "
+        "Launchpad (stderr carries only the progress UI).",
     )
     res_p.add_argument(
         "--prep-image",
