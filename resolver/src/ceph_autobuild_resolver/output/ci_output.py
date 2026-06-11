@@ -30,6 +30,8 @@ import os
 import re
 import sys
 import textwrap
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 
@@ -60,6 +62,28 @@ class CIFailurePayload:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _neutralized_workflow_commands():
+    """Stop GitHub Actions from interpreting model-controlled output.
+
+    Everything between ::stop-commands::<token> and ::<token>:: is treated
+    as plain log text, so a summary or diff containing lines like
+    ``::error::`` or ``::add-mask::`` cannot spoof annotations or
+    manipulate the job log. No-op outside Actions to keep local output
+    clean. The token is unguessable, so the model cannot end the section
+    early.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        yield
+        return
+    token = uuid.uuid4().hex
+    print(f"::stop-commands::{token}")
+    try:
+        yield
+    finally:
+        print(f"::{token}::")
+
+
 def emit_success(payload: CISuccessPayload) -> None:
     if _machine_readable():
         _emit_json({
@@ -75,27 +99,28 @@ def emit_success(payload: CISuccessPayload) -> None:
     annotate = os.environ.get("CI_ANNOTATE_DIFF", "1") == "1"
 
     _banner(f"RESOLVED: {payload.matrix_name}")
-    print()
-    print("## Summary of changes")
-    print()
-    print(payload.summary.strip())
-    print()
-
-    if diff_file:
-        with open(diff_file, "w") as fh:
-            fh.write(payload.diff)
-        lines = len(payload.diff.splitlines())
-        print(f"## Diff written to {diff_file}  ({lines} lines)")
-    else:
-        print("## Diff")
+    with _neutralized_workflow_commands():
         print()
-        diff_body = (
-            _annotate_diff(payload.diff, payload.summary) if annotate
-            else payload.diff
-        )
-        sys.stdout.write(diff_body)
-        if not diff_body.endswith("\n"):
+        print("## Summary of changes")
+        print()
+        print(payload.summary.strip())
+        print()
+
+        if diff_file:
+            with open(diff_file, "w", encoding="utf-8") as fh:
+                fh.write(payload.diff)
+            lines = len(payload.diff.splitlines())
+            print(f"## Diff written to {diff_file}  ({lines} lines)")
+        else:
+            print("## Diff")
             print()
+            diff_body = (
+                _annotate_diff(payload.diff, payload.summary) if annotate
+                else payload.diff
+            )
+            sys.stdout.write(diff_body)
+            if not diff_body.endswith("\n"):
+                print()
 
 
 def emit_failure(payload: CIFailurePayload) -> None:
@@ -111,23 +136,24 @@ def emit_failure(payload: CIFailurePayload) -> None:
         return
 
     _banner(f"UNRESOLVED: {payload.matrix_name}")
-    print()
-    print("## What was attempted")
-    print()
-    print(f"The resolver loop stopped with reason: {payload.stop_reason!r}")
-    print(f"Last failing stage: {payload.failing_command!r}")
-    print()
-    print("## Last build error")
-    print()
-    print("```")
-    print(payload.error_tail.strip())
-    print("```")
-    print()
-    print("## Recommendation")
-    print()
-    print(_recommendation(payload.stop_reason, payload.error_tail))
-    print()
-    print(f"Transcript: {payload.transcript_path}")
+    with _neutralized_workflow_commands():
+        print()
+        print("## What was attempted")
+        print()
+        print(f"The resolver loop stopped with reason: {payload.stop_reason!r}")
+        print(f"Last failing stage: {payload.failing_command!r}")
+        print()
+        print("## Last build error")
+        print()
+        print("```")
+        print(payload.error_tail.strip())
+        print("```")
+        print()
+        print("## Recommendation")
+        print()
+        print(_recommendation(payload.stop_reason, payload.error_tail))
+        print()
+        print(f"Transcript: {payload.transcript_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +281,20 @@ _RECOMMENDATIONS: dict[str, str] = {
     "token_budget_exceeded": textwrap.dedent("""\
         The per-run token budget was exhausted (RUN_TOKEN_BUDGET).
         Raise RUN_TOKEN_BUDGET or switch to a model with lower token usage."""),
+
+    "context_overflow": textwrap.dedent("""\
+        A single request exceeded the provider's per-request input-token
+        limit and the loop stopped cleanly (compression cannot evict the
+        most recent message).
+
+        Likely causes:
+          • A tool returned a huge payload close to the per-result clamp
+            while the rest of the context was already large.
+          • The model accumulated very long visible turns between
+            compressions.
+
+        Try: lower the per-result payload ceiling or the compression
+        thresholds in loop.py, or switch to a larger-context model."""),
 
     "provider_error": textwrap.dedent("""\
         The model provider kept failing (after the adapter's own retries)
