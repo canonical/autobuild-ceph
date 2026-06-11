@@ -391,6 +391,64 @@ def test_compress_history_preserves_recent_turns():
     assert "SENTINEL" in last_texts
 
 
+def test_compress_history_carries_prior_summary_forward():
+    """A second compression must not erase the first compression's summary:
+    its bullet lines are carried into the new summary."""
+    from ceph_autobuild_resolver.loop import _compress_history
+
+    history = _make_history((_COMPRESS_AFTER_TURNS // 2) + 2)
+    # Make the earliest turn distinctive so we can trace it through both
+    # compressions.
+    history[2].tool_calls = [
+        ToolCall(id="e0", name="edit_file", args={"path": "debian/earliest-edit"})
+    ]
+    _compress_history(history)
+    first_summary = history[2].text
+    assert "debian/earliest-edit" in first_summary
+
+    # Grow past the threshold again and re-compress.
+    history.extend(_make_history((_COMPRESS_AFTER_TURNS // 2) + 2)[2:])
+    _compress_history(history)
+    second_summary = history[2].text
+    assert second_summary != first_summary
+    assert "debian/earliest-edit" in second_summary
+
+
+def test_compress_history_ignores_ordinary_user_message_at_cut():
+    from ceph_autobuild_resolver.loop import _compress_history
+
+    history = _make_history((_COMPRESS_AFTER_TURNS // 2) + 2)
+    history.insert(2, Message(role="user", text="please fix the build"))
+    _compress_history(history)
+    # The ordinary user message is summarized away, not treated as a
+    # prior summary whose lines get carried forward.
+    assert "please fix the build" not in (history[2].text or "")
+
+
+def test_summarize_turns_uses_real_schema_arg_keys():
+    """apply_patch's parameter is the diff text and replace_in_upstream's
+    file key is 'file' -- the old summary code used non-existent keys and
+    rendered '?' for both."""
+    diff = "--- a/debian/rules\n+++ b/debian/rules\n@@ -1 +1 @@\n-a\n+b\n"
+    turns = [
+        Message(
+            role="model",
+            tool_calls=[
+                ToolCall(id="c1", name="apply_patch", args={"diff": diff}),
+                ToolCall(
+                    id="c2",
+                    name="replace_in_upstream",
+                    args={"file": "src/common/Foo.cc", "patch_name": "x"},
+                ),
+            ],
+        )
+    ]
+    summary = _summarize_turns(turns)
+    assert "debian/rules" in summary
+    assert "src/common/Foo.cc" in summary
+    assert "?" not in summary
+
+
 def test_summarize_turns_includes_build_outcome():
     turns = [
         Message(
@@ -460,7 +518,12 @@ def test_loop_compresses_history_when_long(fake_lxd, cfg, tmp_path):
     )
 
     # Despite many iterations, history never grew past a manageable size.
-    max_expected = 2 + 1 + _KEEP_RECENT_TURNS + long_cfg.max_iterations * 2
+    # Compression fires at the top of an iteration once len exceeds
+    # _COMPRESS_AFTER_TURNS, and an iteration appends at most two messages,
+    # so the history can only ever overshoot the threshold by one
+    # iteration's growth. (The old bound of 2+1+keep+iters*2 was vacuously
+    # true even with compression completely broken.)
+    max_expected = _COMPRESS_AFTER_TURNS + 4
     assert len(result.history) <= max_expected
     # At least one compression summary should be present.
     summaries = [
@@ -497,3 +560,32 @@ def test_loop_stops_cleanly_on_provider_error(fake_lxd, cfg, tmp_path):
     assert result.declared_resolved is False
     assert result.stop_reason == "provider_error"
     assert "429" in (result.resolution_summary or "")
+
+
+def test_loop_propagates_keyboard_interrupt(fake_lxd, cfg, tmp_path, monkeypatch):
+    """Ctrl-C during dispatch (most of the wall time) must abort the run,
+    not be converted into a synthetic dispatcher_crash tool result."""
+    replies = [
+        Message(
+            role="model",
+            tool_calls=[ToolCall(id="c1", name="run_build", args={})],
+        )
+    ]
+    provider = ScriptedProvider(replies)
+    dispatcher = _build_dispatcher(fake_lxd, cfg)
+
+    def interrupt(calls):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dispatcher, "dispatch", interrupt)
+    budget = Budget.from_config(cfg)
+    transcript = Transcript(tmp_path / "t.jsonl")
+
+    with pytest.raises(KeyboardInterrupt):
+        run_loop(
+            history=[Message(role="user", text="go")],
+            provider=provider,
+            dispatcher=dispatcher,
+            budget=budget,
+            transcript=transcript,
+        )

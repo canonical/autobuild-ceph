@@ -62,9 +62,19 @@ _COMPRESS_AFTER_TURNS = 80
 _KEEP_RECENT_TURNS = 30
 
 
-def _summarize_turns(turns: list[Message]) -> str:
-    """Build a compact text summary of middle turns for history compression."""
-    entries: list[str] = []
+# Shared prefix so _compress_history can recognise a summary it produced
+# earlier and carry its bullets forward instead of erasing them.
+_SUMMARY_PREFIX = "[Session history compressed"
+
+
+def _summarize_turns(turns: list[Message], carried: tuple[str, ...] = ()) -> str:
+    """Build a compact text summary of middle turns for history compression.
+
+    ``carried`` holds bullet lines recovered from a previous summary that is
+    itself being compressed away; they are prepended so the model's memory of
+    early actions survives repeated compressions.
+    """
+    entries: list[str] = list(carried)
 
     for msg in turns:
         if msg.role == ROLE_MODEL:
@@ -74,9 +84,13 @@ def _summarize_turns(turns: list[Message]) -> str:
                 elif tc.name in ("write_file", "edit_file"):
                     entries.append(f"• edited {tc.args.get('path', '?')}")
                 elif tc.name == "apply_patch":
-                    entries.append(f"• applied patch {tc.args.get('patch_path', '?')}")
+                    # apply_patch's only parameter is the diff text itself;
+                    # name the first touched path so the summary is useful.
+                    diff_text = str(tc.args.get("diff", ""))
+                    target = next(iter(_first_diff_target(diff_text)), "?")
+                    entries.append(f"• applied patch to {target}")
                 elif tc.name == "replace_in_upstream":
-                    entries.append(f"• upstream change: {tc.args.get('source_path', '?')}")
+                    entries.append(f"• upstream change: {tc.args.get('file', '?')}")
                 elif tc.name == "drop_patch":
                     entries.append(f"• dropped patch {tc.args.get('patch_name', '?')}")
                 elif tc.name == "delete_file":
@@ -105,11 +119,21 @@ def _summarize_turns(turns: list[Message]) -> str:
                     entries.append(f"  → check_patch {patch}: {status}")
 
     if not entries:
-        return "[Session history compressed — earlier turns had no file changes or builds]"
+        return f"{_SUMMARY_PREFIX} — earlier turns had no file changes or builds]"
     return (
-        "[Session history compressed — earlier actions summarized]\n\n"
+        f"{_SUMMARY_PREFIX} — earlier actions summarized]\n\n"
         + "\n".join(entries)
     )
+
+
+def _first_diff_target(diff: str) -> list[str]:
+    """First ``b/<path>`` target in a unified diff, as a 0/1-element list."""
+    for line in diff.splitlines():
+        if line.startswith("+++ ") and " b/" in line:
+            target = line.split(" b/", 1)[1].split("\t", 1)[0].strip()
+            if target and target != "/dev/null":
+                return [target]
+    return []
 
 
 def _compress_history(history: list[Message]) -> None:
@@ -138,7 +162,20 @@ def _compress_history(history: list[Message]) -> None:
         return
 
     middle = history[2:cut]
-    summary = Message(role="user", text=_summarize_turns(middle))
+    # A previous compression left its summary at index 2 (== middle[0]); a
+    # plain re-summarisation would extract nothing from that text message and
+    # the model's memory of early actions would degrade to nothing over long
+    # runs. Carry its bullet lines into the new summary instead.
+    carried: tuple[str, ...] = ()
+    if (
+        middle
+        and middle[0].role == "user"
+        and (middle[0].text or "").startswith(_SUMMARY_PREFIX)
+    ):
+        carried = tuple(
+            ln for ln in (middle[0].text or "").splitlines()[1:] if ln.strip()
+        )
+    summary = Message(role="user", text=_summarize_turns(middle, carried))
     del history[2:cut]
     history.insert(2, summary)
     log.info(
@@ -233,11 +270,14 @@ def run_loop(
 
         try:
             outcome = dispatcher.dispatch(reply.tool_calls)
-        except BaseException as exc:
+        except Exception as exc:  # noqa: BLE001
             # Catch anything that escaped the dispatcher's own broad handler
             # (e.g. BrokenPipeError from display, or a transient LXD fault).
             # Surface it as a structured tool error so the loop can continue
             # rather than silently dying without writing to the transcript.
+            # Deliberately NOT BaseException: KeyboardInterrupt/SystemExit
+            # must propagate, or the loop is un-interruptible during
+            # dispatch — which is most of the wall time, builds included.
             log.exception("dispatcher raised unexpectedly: %s", exc)
             from .providers.base import ToolResult
             from .tools.dispatch import DispatchOutcome, clamp_oversized_results
