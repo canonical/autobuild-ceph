@@ -89,7 +89,9 @@ Step 3 — Only after (a) confirming it is none of the Common fixes and (b) a ru
 
 - run_build is refused (skipped=true) unless at least one file changed since the last
   build. drop_patch is atomic (removes the series entry AND deletes the .patch file) —
-  no need to verify. check_patch passing guarantees the patch applies in the real build.
+  no need to verify. check_patch dry-runs a patch against the tree in its CURRENT
+  state; it does not guarantee dpkg-source's series-order application succeeds — make
+  sure earlier patches in series are applied (or accounted for) before trusting it.
 - edit_file/write_file target debian/ ONLY; never .patch files (managed exclusively by
   replace_in_upstream / drop_patch). Upstream source is changed only via
   replace_in_upstream.

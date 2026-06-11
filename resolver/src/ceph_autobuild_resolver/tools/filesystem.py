@@ -19,6 +19,11 @@ from ..lxd import LXDManager
 
 log = logging.getLogger(__name__)
 
+# Whole-file reads (edit_file/write_file/replace_in_upstream internals) are
+# capped at the source via head -c. Comfortably above the dispatcher's
+# 256 KiB per-result clamp and far above any legitimate packaging file.
+_MAX_FULL_READ_BYTES = 512 * 1024
+
 
 @dataclass
 class FilesystemHandlers:
@@ -481,14 +486,25 @@ class FilesystemHandlers:
     # ------------------------------------------------------------------
 
     def _read_full_if_exists(self, full_path: str) -> str | None:
+        # Cap the read at the source: a huge file (e.g. a build artifact)
+        # must not land fully in host memory just for the dispatcher to
+        # discard it. Refusing (rather than truncating) matters: edit_file
+        # writes the full content back, so a silent truncation would corrupt
+        # the file.
         result = self.lxd.exec(
             self.container,
-            ["cat", full_path],
+            ["head", "-c", str(_MAX_FULL_READ_BYTES + 1), full_path],
             check=False,
             timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         if not result.ok:
             return None
+        if len(result.stdout.encode("utf-8", "replace")) > _MAX_FULL_READ_BYTES:
+            raise ValueError(
+                f"{full_path} exceeds {_MAX_FULL_READ_BYTES} bytes -- "
+                "refusing a whole-file read. Files this large are build "
+                "artifacts, not editable packaging files."
+            )
         return result.stdout
 
 
