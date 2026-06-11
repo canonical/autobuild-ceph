@@ -205,3 +205,69 @@ def test_declare_resolved_signals_termination(dispatcher):
     )
     assert outcome.declared_resolved is True
     assert outcome.resolution_summary == "fixed it"
+
+
+def test_declare_resolved_rejected_with_unbuilt_changes(dispatcher):
+    """A successful build followed by further edits is untested: declaring
+    resolved must be rejected until the model rebuilds."""
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True,
+        stage="build",
+        returncode=0,
+        log_path="/root/build-logs/build.log",
+        log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = True
+
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="declare_resolved", args={"summary": "done"})]
+    )
+    assert outcome.declared_resolved is False
+    assert "changed since the last successful run_build" in outcome.results[0].payload["error"]
+
+
+def test_declare_resolved_rejected_in_same_batch_as_mutation(dispatcher, fake_lxd):
+    """edit + declare_resolved in one parallel batch: calls are processed in
+    order, so the declare must see the pending edit and be rejected."""
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True,
+        stage="build",
+        returncode=0,
+        log_path="/root/build-logs/build.log",
+        log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = False
+
+    outcome = dispatcher.dispatch(
+        [
+            ToolCall(
+                id="c1",
+                name="write_file",
+                args={"path": "debian/foo", "content": "x"},
+            ),
+            ToolCall(id="c2", name="declare_resolved", args={"summary": "done"}),
+        ]
+    )
+    assert outcome.declared_resolved is False
+
+
+def test_declare_resolved_accepted_after_clean_build(dispatcher):
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True,
+        stage="build",
+        returncode=0,
+        log_path="/root/build-logs/build.log",
+        log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = False
+
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="declare_resolved", args={"summary": "done"})]
+    )
+    assert outcome.declared_resolved is True

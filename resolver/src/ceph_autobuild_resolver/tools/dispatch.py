@@ -220,6 +220,26 @@ class Dispatcher:
                         )
                     )
                     continue
+                if self._execution.files_changed_since_last_build:
+                    # A successful build followed by further edits is NOT a
+                    # verified fix: the stray edits would land in the captured
+                    # diff untested, and validation would catch it only at the
+                    # cost of a full rebuild misreported as validation_failed.
+                    results.append(
+                        ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            payload={
+                                "error": (
+                                    "declare_resolved rejected: files have "
+                                    "changed since the last successful "
+                                    "run_build, so the current state is "
+                                    "untested. Call run_build first."
+                                )
+                            },
+                        )
+                    )
+                    continue
                 declared = True
                 summary = str(call.args.get("summary", ""))
                 results.append(
