@@ -46,6 +46,26 @@ class PreflightResult:
     refreshed: list[str]
 
 
+def merge(first: PreflightResult, second: PreflightResult) -> PreflightResult:
+    """Combine two preflight passes: latest report, union of changes.
+
+    A second pass (after a failed post-preflight rebuild) starts from
+    already-cleaned state, so its dropped/refreshed lists are typically
+    empty. Keeping only the second result would erase the record of what
+    preflight actually did from the PR summary; the report, by contrast,
+    must reflect the *current* patch state, so the latest one wins.
+    """
+
+    def _union(a: list[str], b: list[str]) -> list[str]:
+        return list(dict.fromkeys([*a, *b]))
+
+    return PreflightResult(
+        report=second.report,
+        dropped=_union(first.dropped, second.dropped),
+        refreshed=_union(first.refreshed, second.refreshed),
+    )
+
+
 def run(lxd: LXDManager, container: str, cfg: Config, series: str) -> PreflightResult:
     """Run the preflight; on any failure return an empty result.
 
