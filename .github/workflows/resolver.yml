@@ -127,7 +127,7 @@ jobs:
           echo "=== ccache stats for $MATRIX_NAME ==="
           if [ -d "$CCACHE_HOST_DIR" ]; then
             du -sh "$CCACHE_HOST_DIR"
-            lxc exec ceph-build -- bash -c \
+            lxc exec "ceph-build-$MATRIX_NAME" -- bash -c \
               "CCACHE_DIR=/root/ccache ccache --print-stats 2>/dev/null" || true
           else
             echo "(cache dir not present)"
