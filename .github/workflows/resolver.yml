@@ -28,6 +28,18 @@ on:
   pull_request:
     branches:
       - main
+    # The resolver is a long (up to 12 h) paid run; only trigger it when the
+    # code it exercises changes. Docs-only PRs skip it. The unit-test
+    # workflow (resolver-tests.yml) runs unfiltered on every PR. The
+    # schedule/workflow_dispatch triggers are unaffected by this filter.
+    paths:
+      - 'resolver/**'
+      - 'run-resolver.sh'
+      - '.github/workflows/resolver.yml'
+
+# The job runs PR-supplied code; never hand it a writable GITHUB_TOKEN.
+permissions:
+  contents: read
 
 jobs:
   resolve:
@@ -131,10 +143,15 @@ jobs:
 
       - name: Show diff
         if: always()
+        # The diff is model-generated: neutralize workflow commands so a
+        # line like ::error:: in patch content can't spoof annotations.
         run: |
           if [ -s "$CI_DIFF_FILE" ]; then
             echo "=== resolver diff for $MATRIX_NAME ==="
+            stop_token="$(uuidgen | tr -d '-')"
+            echo "::stop-commands::${stop_token}"
             cat "$CI_DIFF_FILE"
+            echo "::${stop_token}::"
           else
             echo "(no diff produced)"
           fi
