@@ -1,0 +1,33 @@
+name: Resolver unit tests
+
+# Runs the resolver's unit suite on every PR, forks included: hosted runner,
+# no secrets, no environment — safe for untrusted code. Deliberately NOT
+# paths-filtered so it always reports and can be made a required check
+# (the expensive self-hosted resolver job in resolver.yml is filtered and
+# fork-gated instead).
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: resolver
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run unit tests
+        run: uv run --extra test pytest
