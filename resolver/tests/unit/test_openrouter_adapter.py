@@ -438,3 +438,84 @@ def test_connect_error_exhausts_retries():
 
     with patch("time.sleep"), pytest.raises(openai.APIConnectionError):
         adapter.chat([Message(role="user", text="hi")])
+
+
+# ---------------------------------------------------------------------------
+# Error handling: context overflow, empty choices, truncation
+# ---------------------------------------------------------------------------
+
+import pytest
+from openai import BadRequestError
+
+from ceph_autobuild_resolver.providers.base import ContextOverflowError
+
+
+def _adapter_with(handler) -> OpenRouterAdapter:
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport)
+    return OpenRouterAdapter(api_key="sk-test", model="m", http_client=client)
+
+
+def test_chat_maps_context_limit_400_to_context_overflow():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {
+                "message": (
+                    "This endpoint's maximum context length is 200000 tokens. "
+                    "However, you requested 215000 tokens."
+                ),
+                "type": "invalid_request_error",
+            }},
+        )
+
+    with pytest.raises(ContextOverflowError):
+        _adapter_with(handler).chat([Message(role="user", text="hi")])
+
+
+def test_chat_reraises_unrelated_400():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"message": "Invalid parameter: tools"}},
+        )
+
+    with pytest.raises(BadRequestError):
+        _adapter_with(handler).chat([Message(role="user", text="hi")])
+
+
+def test_empty_choices_returns_blocked_turn():
+    """OpenRouter can return HTTP 200 with empty choices and an in-body
+    provider error; that must come back as a recoverable [BLOCKED] turn."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [],
+                "error": {"message": "Provider returned error", "code": 502},
+                "usage": {"prompt_tokens": 7, "completion_tokens": 0},
+            },
+        )
+
+    reply, usage = _adapter_with(handler).chat([Message(role="user", text="hi")])
+    assert "[BLOCKED" in reply.text
+    assert usage.input_tokens == 7
+
+
+def test_finish_reason_length_marks_truncated_reply():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {"role": "assistant", "content": "partial answer"},
+                }],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 9},
+            },
+        )
+
+    reply, _usage = _adapter_with(handler).chat([Message(role="user", text="hi")])
+    assert "partial answer" in reply.text
+    assert "[TRUNCATED" in reply.text

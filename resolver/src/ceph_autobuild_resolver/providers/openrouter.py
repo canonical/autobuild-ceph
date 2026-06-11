@@ -21,10 +21,11 @@ import uuid
 from typing import Any
 
 import httpx
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from .base import ROLE_MODEL
 from .base import (
+    ContextOverflowError,
     Message,
     ProviderAdapter,
     ToolCall,
@@ -36,6 +37,22 @@ from .base import (
 log = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Phrasings that identify a 400 as "request exceeded the context window".
+# OpenRouter itself says "This endpoint's maximum context length is N
+# tokens..."; Anthropic-via-OpenRouter says "prompt is too long: X tokens
+# > Y maximum". Kept narrow for the same reason as the Gemini markers.
+_CONTEXT_LIMIT_MARKERS = (
+    "maximum context length",
+    "context length exceeded",
+    "prompt is too long",
+    "input token count",
+)
+
+
+def _is_context_limit_error(exc: BadRequestError) -> bool:
+    msg = (str(exc) or "").lower()
+    return any(marker in msg for marker in _CONTEXT_LIMIT_MARKERS)
 
 
 class OpenRouterAdapter(ProviderAdapter):
@@ -98,7 +115,15 @@ class OpenRouterAdapter(ProviderAdapter):
             kwargs["extra_body"] = {"reasoning": self._reasoning}
 
         log.debug("openrouter request: %d messages", len(kwargs["messages"]))
-        response = self._client.chat.completions.create(**kwargs)
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except BadRequestError as exc:
+            # Per the base.py contract every adapter translates its own
+            # "request too large" failure so the loop can stop cleanly with
+            # a recorded outcome. Other 400s are real errors — re-raise.
+            if _is_context_limit_error(exc):
+                raise ContextOverflowError(str(exc)) from exc
+            raise
         return _from_sdk_response(response)
 
 
@@ -175,7 +200,23 @@ def _role_to_wire(role: str) -> str:
 
 def _from_sdk_response(response: Any) -> tuple[Message, Usage]:
     """Parse an openai SDK ChatCompletion into canonical reply + usage."""
-    msg = response.choices[0].message
+    if not response.choices:
+        # OpenRouter can return HTTP 200 with empty choices and an in-body
+        # provider error. Surface as a recoverable [BLOCKED] turn (mirrors
+        # the Gemini adapter) instead of crashing on choices[0].
+        err = (getattr(response, "model_extra", None) or {}).get("error")
+        log.error("openrouter returned no choices (error=%s)", err)
+        usage = Usage(
+            input_tokens=response.usage.prompt_tokens if response.usage else 0,
+            output_tokens=response.usage.completion_tokens if response.usage else 0,
+        )
+        return Message(
+            role=ROLE_MODEL,
+            text=f"[BLOCKED: provider returned no choices; error={err}]",
+        ), usage
+
+    choice = response.choices[0]
+    msg = choice.message
 
     tool_calls: list[ToolCall] = []
     for tc in msg.tool_calls or []:
@@ -204,9 +245,18 @@ def _from_sdk_response(response: Any) -> tuple[Message, Usage]:
         output_tokens=response.usage.completion_tokens if response.usage else 0,
     )
 
+    text = msg.content or None
+    if getattr(choice, "finish_reason", None) == "length":
+        # A length-truncated reply is otherwise indistinguishable from a
+        # complete one; mark it so the loop/transcript see why the turn
+        # was cut short.
+        log.warning("openrouter reply truncated: finish_reason=length")
+        if not tool_calls:
+            text = f"{text or ''}\n[TRUNCATED: finish_reason=length — reply hit the output-token limit]".strip()
+
     return Message(
         role=ROLE_MODEL,
-        text=msg.content or None,
+        text=text,
         reasoning=reasoning_text,
         reasoning_details=reasoning_details,
         tool_calls=tool_calls,
