@@ -56,7 +56,14 @@ _SCHEMA_UNSUPPORTED = frozenset({
 class GeminiAdapter(ProviderAdapter):
     def __init__(self, api_key: str, model: str, thinking_budget: int | None = None) -> None:
         self._model = model
-        self._client = genai.Client(api_key=api_key)
+        # google-genai performs NO retries by default (stop_after_attempt(1));
+        # a single 429/5xx blip would otherwise crash a multi-hour run.
+        # HttpRetryOptions defaults: 5 attempts, exponential backoff with
+        # jitter, retriable codes 408/429/500/502/503/504.
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions()),
+        )
         self._fn_declarations: list[types.FunctionDeclaration] = []
         # None means "let the model decide" (default thinking enabled).
         # An explicit budget caps the thinking token spend per call.
