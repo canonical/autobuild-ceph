@@ -477,12 +477,24 @@ def _flags_to_dict(flags: guards.WriteFlags) -> dict[str, bool]:
 
 
 def _diff_target_paths(diff: str) -> list[str]:
-    """Extract ``b/<path>`` targets from a unified diff."""
+    """Extract every path a unified diff touches.
+
+    Post-image (``+++ b/``) lines alone are not enough: a deletion hunk has
+    ``+++ /dev/null`` and a rename carries its paths in ``rename from``/
+    ``rename to`` headers, so pre-image (``--- a/``) and rename lines must be
+    collected too or deletions/renames would bypass the scope check entirely.
+    """
     targets: list[str] = []
     for line in diff.splitlines():
-        # ``+++ b/path/to/file`` is the post-image line in git-style diffs.
+        target = ""
         if line.startswith("+++ ") and " b/" in line:
             target = line.split(" b/", 1)[1].split("\t", 1)[0].strip()
-            if target and target != "/dev/null":
-                targets.append(target)
+        elif line.startswith("--- ") and " a/" in line:
+            target = line.split(" a/", 1)[1].split("\t", 1)[0].strip()
+        elif line.startswith("rename from "):
+            target = line[len("rename from "):].strip()
+        elif line.startswith("rename to "):
+            target = line[len("rename to "):].strip()
+        if target and target != "/dev/null" and target not in targets:
+            targets.append(target)
     return targets
