@@ -117,3 +117,52 @@ def test_diff_still_captures_patches_dir(repo: Path):
 
     assert "debian/patches/fix.patch" in diff
     assert "fix.patch" in diff
+
+
+# ---------------------------------------------------------------------------
+# Failure-path helpers
+# ---------------------------------------------------------------------------
+
+from ceph_autobuild_resolver.orchestrator import _last_failed_build_tail
+from ceph_autobuild_resolver.preflight import PreflightResult, merge
+from ceph_autobuild_resolver.providers.base import Message, ToolResult
+
+
+def _build_msg(ok: bool, tail: str, skipped: bool = False) -> Message:
+    payload = {"ok": ok, "log_tail": tail}
+    if skipped:
+        payload["skipped"] = True
+    return Message(
+        role="tool",
+        tool_results=[ToolResult(call_id="c", name="run_build", payload=payload)],
+    )
+
+
+def test_last_failed_build_tail_prefers_latest_failure():
+    history = [
+        _build_msg(False, "error: initial failure"),
+        _build_msg(False, "error: later, different failure"),
+        _build_msg(True, "ok"),
+    ]
+    assert _last_failed_build_tail(history) == "error: later, different failure"
+
+
+def test_last_failed_build_tail_skips_refused_builds():
+    history = [
+        _build_msg(False, "error: real failure"),
+        _build_msg(False, "Refusing to re-run the build", skipped=True),
+    ]
+    assert _last_failed_build_tail(history) == "error: real failure"
+
+
+def test_last_failed_build_tail_empty_when_no_failures():
+    assert _last_failed_build_tail([_build_msg(True, "ok")]) == ""
+
+
+def test_preflight_merge_keeps_first_pass_changes_and_latest_report():
+    first = PreflightResult(report="r1", dropped=["a.patch"], refreshed=["b.patch"])
+    second = PreflightResult(report="r2", dropped=[], refreshed=["b.patch"])
+    merged = merge(first, second)
+    assert merged.report == "r2"
+    assert merged.dropped == ["a.patch"]
+    assert merged.refreshed == ["b.patch"]

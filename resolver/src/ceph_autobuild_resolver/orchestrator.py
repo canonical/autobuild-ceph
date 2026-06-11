@@ -115,8 +115,11 @@ def run(
                 summary=pf.format_summary(pf_result),
             )
         # Build still failing — refresh series + report for the model.
+        # Merge rather than overwrite: the second pass starts from cleaned
+        # state, and its (typically empty) dropped/refreshed lists would
+        # erase the record of what preflight did from the PR summary.
         patch_series = _capture_patch_series(lxd, container, cfg)
-        pf_result = pf.run(lxd, container, cfg, patch_series)
+        pf_result = pf.merge(pf_result, pf.run(lxd, container, cfg, patch_series))
         pf.record(transcript, pf_result)
 
     # 3. Set up the resolution loop with the (possibly cleaned) state.
@@ -127,7 +130,13 @@ def run(
         lxd=lxd, cfg=cfg, container=container, runner=runner
     )
     search_handlers = SearchHandlers(lxd=lxd, cfg=cfg, container=container)
-    exec_handlers = ExecutionHandlers(runner=runner, container=container)
+    # Seed last_build with the already-failed build: a turn-one
+    # declare_resolved must be rejected by the dispatch guard (not caught
+    # later by a wasted validation rebuild), and the no-change run_build
+    # guard must be active from the first turn.
+    exec_handlers = ExecutionHandlers(
+        runner=runner, container=container, last_build=current_failure
+    )
     dispatcher = Dispatcher(
         filesystem=fs_handlers,
         search=search_handlers,
@@ -173,6 +182,44 @@ def run(
             last_build_error=last_error,
         )
 
+    if (
+        not loop_result.declared_resolved
+        and loop_result.stop_reason != "declared_unresolvable"
+        and exec_handlers.last_build is not None
+        and exec_handlers.last_build.ok
+        and not exec_handlers.files_changed_since_last_build
+    ):
+        # The budget ran out (or the model stopped) one step short of
+        # declare_resolved, but the last build succeeded and nothing changed
+        # since — salvage the work. Validation still gates publishing.
+        log.info(
+            "loop stopped (%s) without declare_resolved but the last build "
+            "succeeded with no pending edits — proceeding to validation",
+            loop_result.stop_reason,
+        )
+        summary = (
+            "The build succeeded but the model stopped without calling "
+            f"declare_resolved (stop_reason={loop_result.stop_reason})."
+        )
+        if loop_result.resolution_summary:
+            summary += "\n\n" + loop_result.resolution_summary
+        preflight_note = pf.format_summary(pf_result)
+        if preflight_note:
+            summary += "\n\n" + preflight_note
+        return _validate_and_publish(
+            lxd=lxd,
+            runner=runner,
+            cfg=cfg,
+            container=container,
+            pristine_snapshot=pristine_snapshot,
+            matrix_name=matrix_name,
+            transcript=transcript,
+            dry_run_output=dry_run_output,
+            initial=initial,
+            summary=summary,
+            emit_summary=_emit_summary,
+        )
+
     if not loop_result.declared_resolved:
         transcript.outcome("loop_failed", stop_reason=loop_result.stop_reason)
         last_error = _last_build_error(loop_result.history)
@@ -182,17 +229,20 @@ def run(
             last_error=last_error,
         )
         # For declare_unresolvable, the model's explanation is more useful
-        # than the raw build log tail. Use it as the error_tail so it appears
-        # in the CI failure output and the eventual Launchpad bug description.
+        # than the raw build log tail. Otherwise use the tail of the LAST
+        # failed build from the loop history — after the model has iterated,
+        # the actual last error usually differs from the initial one, and
+        # the analysis must point the reader at the right failure.
+        last_tail = _last_failed_build_tail(loop_result.history)
         error_tail = (
-            loop_result.resolution_summary or initial.log_tail
+            loop_result.resolution_summary or last_tail or current_failure.log_tail
             if loop_result.stop_reason == "declared_unresolvable"
-            else initial.log_tail
+            else (last_tail or current_failure.log_tail)
         )
         file_bug(
             BugPayload(
                 matrix_name=matrix_name,
-                failing_command=initial.stage,
+                failing_command=current_failure.stage,
                 error_tail=error_tail,
                 transcript_path=str(transcript.path),
                 stop_reason=loop_result.stop_reason,
@@ -374,6 +424,28 @@ def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
         timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )
     return result.stdout
+
+
+def _last_failed_build_tail(history) -> str:
+    """Full log_tail of the last run_build that actually executed and failed.
+
+    Skips refused builds (skipped=true) — those carry no fresh output.
+    Returns "" when the loop never reached a failing build.
+    """
+    tail = ""
+    for msg in history:
+        if msg.role != "tool":
+            continue
+        for r in msg.tool_results:
+            if (
+                r.name == "run_build"
+                and not r.payload.get("ok")
+                and not r.payload.get("skipped")
+            ):
+                t = r.payload.get("log_tail") or ""
+                if t:
+                    tail = t
+    return tail
 
 
 def _last_build_error(history) -> str:
