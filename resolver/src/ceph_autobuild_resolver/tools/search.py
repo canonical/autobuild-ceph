@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from .. import guards
 from ..config import Config
 from ..lxd import LXDManager
 
@@ -43,16 +44,11 @@ class SearchHandlers:
             max_matches = DEFAULT_GREP_MATCHES
         max_matches = max(0, min(max_matches, HARD_MAX_MATCHES))
 
-        # Normalise path: if the model passes an absolute container path
-        # (e.g. "/root/ceph/CMakeLists.txt") strip the workdir prefix so we
-        # don't double-prepend and end up with a non-existent path.
-        if path.startswith("/"):
-            workdir = self.cfg.container_workdir.rstrip("/")
-            if path.startswith(workdir + "/"):
-                path = path[len(workdir) + 1:]
-            elif path == workdir:
-                path = "."
-            # else: absolute path outside workdir — pass as-is and let grep fail
+        # Contain the search to the workspace: strips a workdir prefix from
+        # absolute paths (so we don't double-prepend below) and rejects ``..``
+        # traversal and out-of-workspace absolute paths. The dispatcher turns
+        # the rejection into a structured tool error.
+        path = guards.contained_relpath(path, self.cfg.container_workdir) or "."
         # We rely on grep's recursive mode and let the shell's path resolution
         # apply relative to the workdir. ``-n`` prefixes line numbers; ``-H``
         # ensures path is always shown (even on a single-file target).
@@ -135,6 +131,10 @@ class SearchHandlers:
         from .schema import DEFAULT_GIT_LOG_ENTRIES
 
         n = n or DEFAULT_GIT_LOG_ENTRIES
+        if path:
+            # Same containment as grep: git itself refuses out-of-repo
+            # pathspecs, but rejecting early gives a structured error.
+            path = guards.contained_relpath(path, self.cfg.container_workdir)
         argv = [
             "git",
             "-C",
