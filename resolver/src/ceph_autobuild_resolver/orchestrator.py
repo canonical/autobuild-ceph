@@ -317,33 +317,55 @@ def _capture_patch_series(lxd: LXDManager, container: str, cfg: Config) -> str:
 
 
 
-def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
-    """Capture the model's accumulated changes as a unified diff against HEAD.
+# Build artifacts under debian/ that must never enter the captured diff:
+# they would make git apply --index fail during validation. Everything else
+# under debian/ is model-writable (the prompt directs edits to e.g.
+# debian/*.install) and must be captured.
+_DIFF_EXCLUDES = (
+    ":!debian/.debhelper",
+    ":!debian/tmp",
+    ":!debian/files",
+    ":!debian/*.substvars",
+    ":!debian/*.debhelper.log",
+    ":!debian/*.debhelper",
+    ":!debian/debhelper-build-stamp",
+    ":!debian/*.orig",
+)
 
-    Scope git-add to model-writable paths only (debian/patches/ + debian root
-    files).  git add -A would also stage debhelper build artifacts under
-    debian/<pkg>/ and quilt-created .orig files in upstream src/, both of which
-    make git apply --index fail during validation.
+
+def _diff_stage_script(workdir: str) -> str:
+    """Shell script that stages every model change under debian/ and prints it.
+
+    An excludelist, not an allowlist: the prompt tells the model to edit
+    arbitrary files under debian/ (control, *.install, rules, ...), so an
+    allowlist silently drops directed edits from the captured diff -- the
+    published diff then no longer matches what the model actually tested.
+
+    Excluded are the debhelper/quilt build artifacts only: the fixed names
+    above plus per-package staging trees, whose directory names are exactly
+    the binary package names declared in debian/control.  ':!...' exclude
+    pathspecs don't trigger git add's "pathspec did not match" fatal (that
+    applies to positive pathspecs only, and debian/ always matches), and
+    'git add -- debian/' also stages deletions of tracked files.  Quilt
+    .orig artifacts in upstream src/ are never staged because the only
+    positive pathspec is debian/.
     """
-    # Stage only the paths the model is allowed to change.  debhelper staging
-    # trees (debian/ceph-*/…) and quilt artefacts in src/ are intentionally
-    # excluded.
-    #
-    # git add fails fatally if any listed pathspec doesn't match a real file,
-    # which silently suppresses ALL staging when 2>/dev/null is used.  Stage
-    # debian/patches/ (always a dir) first, then add individual top-level
-    # debian/ files only when they exist.
-    stage_cmd = (
-        f"cd {cfg.container_workdir} && "
+    excludes = " ".join(f'"{e}"' for e in _DIFF_EXCLUDES)
+    return (
+        f"cd {workdir} && "
         "git reset HEAD -- . >/dev/null 2>&1; "  # git reset writes status to stdout
-        "git add -- debian/patches/ 2>/dev/null; "
-        "for _f in debian/rules debian/control debian/changelog "
-        "          debian/copyright debian/compat debian/gbp.conf; do "
-        '  [ -e "$_f" ] && git add -- "$_f" 2>/dev/null; '
+        "ex=''; "
+        "for p in $(awk '/^Package:/{print $2}' debian/control 2>/dev/null); do "
+        '  ex="$ex :!debian/$p"; '
         "done; "
+        f"git add -- debian/ {excludes} $ex; "
         "git diff --staged"
     )
-    result = lxd.exec_shell(container, stage_cmd, check=False)
+
+
+def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
+    """Capture the model's accumulated changes as a unified diff against HEAD."""
+    result = lxd.exec_shell(container, _diff_stage_script(cfg.container_workdir), check=False)
     return result.stdout
 
 
