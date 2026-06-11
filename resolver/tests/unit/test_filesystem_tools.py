@@ -118,6 +118,39 @@ def test_diff_target_paths_extracts_b_targets():
     assert _diff_target_paths(diff) == ["debian/patches/x.patch"]
 
 
+def test_diff_target_paths_collects_preimage_for_deletions():
+    diff = (
+        "diff --git a/src/secret.cc b/src/secret.cc\n"
+        "deleted file mode 100644\n"
+        "--- a/src/secret.cc\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-x\n"
+    )
+    assert _diff_target_paths(diff) == ["src/secret.cc"]
+
+
+def test_diff_target_paths_collects_rename_headers():
+    diff = (
+        "diff --git a/src/old.cc b/src/new.cc\n"
+        "similarity index 100%\n"
+        "rename from src/old.cc\n"
+        "rename to src/new.cc\n"
+    )
+    assert _diff_target_paths(diff) == ["src/old.cc", "src/new.cc"]
+
+
+def test_apply_patch_rejects_out_of_scope_deletion(fs):
+    diff = (
+        "--- a/src/foo.cc\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-x\n"
+    )
+    with pytest.raises(Exception):
+        fs.apply_patch(diff)
+
+
 def test_apply_patch_rejects_upstream_targets(fs):
     diff = (
         "--- a/src/foo.cc\n"
