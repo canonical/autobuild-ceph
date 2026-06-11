@@ -196,7 +196,7 @@ def _control_version_constraints_changed(old: str, new: str) -> bool:
     We extract lines that look like dependency constraints — anything
     containing ``(>=``, ``(<<``, ``(=``, ``(>>``, ``(<=`` — and compare sets.
     """
-    markers = ("(>=", "(<<", "(=", "(>>")
+    markers = ("(>=", "(<<", "(=", "(>>", "(<=")
 
     def constraint_lines(text: str) -> set[str]:
         return {

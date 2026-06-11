@@ -104,3 +104,15 @@ def test_contained_relpath_strips_workdir_prefix():
     assert guards.contained_relpath("/root/ceph/debian/control", "/root/ceph") == "debian/control"
     assert guards.contained_relpath("/root/ceph", "/root/ceph") == ""
     assert guards.contained_relpath("debian/control", "/root/ceph") == "debian/control"
+
+
+def test_control_version_constraints_detects_lte_marker():
+    old = "Depends: foo (<= 1.0)\n"
+    new = "Depends: foo (<= 2.0)\n"
+    flags = guards.evaluate_flags(
+        "debian/control",
+        is_delete=False,
+        new_content=new,
+        old_content=old,
+    )
+    assert flags.debian_control_version_change is True

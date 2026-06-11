@@ -344,3 +344,15 @@ def test_read_files_rejects_absolute_outside_workdir(fs):
     out = fs.read_files(["/etc/passwd"])
     assert "error" in out["files"][0]
     assert "outside the workspace" in out["files"][0]["error"]
+
+
+def test_read_full_refuses_oversized_files(fake_lxd, fs):
+    """Oversized whole-file reads must refuse, not truncate: edit_file
+    writes the full content back, so truncation would corrupt the file.
+    The dispatcher converts the ValueError into a structured handler
+    error for the model."""
+    from ceph_autobuild_resolver.tools.filesystem import _MAX_FULL_READ_BYTES
+
+    _seed_file(fake_lxd, "debian/huge", "x" * (_MAX_FULL_READ_BYTES + 10))
+    with pytest.raises(ValueError, match="exceeds"):
+        fs.edit_file("debian/huge", "x", "y")
