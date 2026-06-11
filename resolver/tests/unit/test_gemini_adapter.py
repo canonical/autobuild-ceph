@@ -56,3 +56,11 @@ def test_chat_reraises_unrelated_400(monkeypatch):
     monkeypatch.setattr(adapter._client.models, "generate_content", boom)
     with pytest.raises(genai_errors.ClientError):
         adapter.chat([Message(role="user", text="hi")])
+
+
+def test_client_configured_with_retries():
+    """google-genai defaults to zero retries; the adapter must opt in so a
+    transient 429/5xx cannot destroy a multi-hour run."""
+    adapter = GeminiAdapter(api_key="x", model="gemini-test")
+    retry_options = adapter._client._api_client._http_options.retry_options
+    assert retry_options is not None

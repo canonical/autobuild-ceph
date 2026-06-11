@@ -468,3 +468,32 @@ def test_loop_compresses_history_when_long(fake_lxd, cfg, tmp_path):
         if m.role == "user" and "compressed" in (m.text or "").lower()
     ]
     assert len(summaries) >= 1
+
+
+def test_loop_stops_cleanly_on_provider_error(fake_lxd, cfg, tmp_path):
+    """A non-overflow provider exception (retries already exhausted in the
+    adapter) must stop the loop with stop_reason='provider_error' so the
+    orchestrator records an outcome instead of crashing."""
+
+    class FlakyProvider:
+        def declare_tools(self, tools):
+            pass
+
+        def chat(self, history):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED after 5 attempts")
+
+    dispatcher = _build_dispatcher(fake_lxd, cfg)
+    budget = Budget.from_config(cfg)
+    transcript = Transcript(tmp_path / "t.jsonl")
+
+    result = run_loop(
+        history=[Message(role="user", text="go")],
+        provider=FlakyProvider(),
+        dispatcher=dispatcher,
+        budget=budget,
+        transcript=transcript,
+    )
+
+    assert result.declared_resolved is False
+    assert result.stop_reason == "provider_error"
+    assert "429" in (result.resolution_summary or "")

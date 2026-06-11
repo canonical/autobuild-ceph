@@ -191,6 +191,18 @@ def run_loop(
                 history=history,
                 stop_reason="context_overflow",
             )
+        except Exception as exc:  # noqa: BLE001
+            # Any other provider failure has already exhausted the adapter's
+            # own retries (e.g. persistent 429/5xx). Stop cleanly so the
+            # orchestrator records an outcome and emits a CI artifact rather
+            # than losing the whole run to a raw traceback.
+            log.exception("provider error, stopping: %s", exc)
+            return LoopResult(
+                declared_resolved=False,
+                resolution_summary=f"provider error: {exc}",
+                history=history,
+                stop_reason="provider_error",
+            )
         budget.record_usage(usage)
         display.token_usage(budget.input_tokens_used, budget.output_tokens_used, budget.cfg.run_token_budget)
         transcript.model_turn(reply, usage)

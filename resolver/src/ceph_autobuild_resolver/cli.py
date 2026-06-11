@@ -153,14 +153,35 @@ def _do_resolve(cfg, args) -> int:
             lxd=lxd,
         )
 
-    outcome = orchestrator.run(
-        cfg=cfg,
-        container=args.container,
-        pristine_snapshot=args.pristine_snapshot,
-        matrix_name=args.matrix_name,
-        transcript_path=args.transcript_path,
-        dry_run_output=args.dry_run_output,
-    )
+    try:
+        outcome = orchestrator.run(
+            cfg=cfg,
+            container=args.container,
+            pristine_snapshot=args.pristine_snapshot,
+            matrix_name=args.matrix_name,
+            transcript_path=args.transcript_path,
+            dry_run_output=args.dry_run_output,
+        )
+    except Exception:
+        # A crash anywhere outside the loop (preflight, validation, LXD,
+        # output generation) must still produce a CI failure artifact —
+        # a raw traceback after hours of paid work records no outcome.
+        import traceback
+
+        from .output.ci_output import CIFailurePayload, emit_failure
+
+        logging.exception("resolver crashed outside the resolution loop")
+        tail = "\n".join(traceback.format_exc().splitlines()[-30:])
+        emit_failure(
+            CIFailurePayload(
+                matrix_name=args.matrix_name,
+                stop_reason="resolver_crash",
+                failing_command="orchestrator",
+                error_tail=tail,
+                transcript_path=args.transcript_path,
+            )
+        )
+        return 1
     print(outcome.description, file=sys.stderr)
     return outcome.exit_code
 

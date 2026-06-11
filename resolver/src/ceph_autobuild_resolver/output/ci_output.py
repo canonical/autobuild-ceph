@@ -256,6 +256,24 @@ _RECOMMENDATIONS: dict[str, str] = {
         The per-run token budget was exhausted (RUN_TOKEN_BUDGET).
         Raise RUN_TOKEN_BUDGET or switch to a model with lower token usage."""),
 
+    "provider_error": textwrap.dedent("""\
+        The model provider kept failing (after the adapter's own retries)
+        and the loop stopped to preserve the run's outcome.
+
+        Likely causes:
+          • A persistent rate limit or quota exhaustion (429) on the API key.
+          • A provider outage (5xx).
+
+        Check the exception in the transcript / job log, then re-run once
+        the provider recovers."""),
+
+    "resolver_crash": textwrap.dedent("""\
+        The resolver itself crashed outside the resolution loop (preflight,
+        validation, LXD plumbing, or output generation).
+
+        This is a resolver bug or an environment fault, not a packaging
+        failure.  Check the traceback above and the job log."""),
+
     "declared_unresolvable": textwrap.dedent("""\
         The model determined the build failure is not solvable with the
         available tools and information.  The model's explanation is above.
