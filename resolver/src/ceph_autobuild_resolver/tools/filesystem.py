@@ -14,7 +14,7 @@ from typing import Any
 
 from .. import display, guards
 from ..build_runner import BuildRunner
-from ..config import Config
+from ..config import TOOL_EXEC_TIMEOUT_SECONDS, Config
 from ..lxd import LXDManager
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,10 @@ class FilesystemHandlers:
                 continue
             full = f"{self.cfg.container_workdir}/{rel}"
             count_res = self.lxd.exec(
-                self.container, ["wc", "-l", full], check=False
+                self.container,
+                ["wc", "-l", full],
+                check=False,
+                timeout=TOOL_EXEC_TIMEOUT_SECONDS,
             )
             if not count_res.ok:
                 files.append(
@@ -85,6 +88,7 @@ class FilesystemHandlers:
                 self.container,
                 ["sed", "-n", f"{start_line},{effective_end}p", full],
                 check=False,
+                timeout=TOOL_EXEC_TIMEOUT_SECONDS,
             )
             content = slice_res.stdout
             files.append(
@@ -133,6 +137,7 @@ class FilesystemHandlers:
             self.container,
             ["grep", *flags, "-e", pattern, log_path],
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         # grep returns 1 when there are no matches, which is not an error.
         if result.returncode > 1:
@@ -157,7 +162,10 @@ class FilesystemHandlers:
 
         end = end if end is not None else start + DEFAULT_LOG_BYTES
         size_res = self.lxd.exec(
-            self.container, ["stat", "-c", "%s", log_path], check=False
+            self.container,
+            ["stat", "-c", "%s", log_path],
+            check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         if not size_res.ok:
             return {"error": size_res.stderr.strip() or "log not found"}
@@ -184,6 +192,7 @@ class FilesystemHandlers:
                 "status=none",
             ],
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         return {
             "content": result.stdout,
@@ -264,7 +273,12 @@ class FilesystemHandlers:
         flags = guards.evaluate_flags(
             rel, is_delete=True, new_content=None, old_content=old
         )
-        result = self.lxd.exec(self.container, ["rm", "-f", full], check=False)
+        result = self.lxd.exec(
+            self.container,
+            ["rm", "-f", full],
+            check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+        )
         return {
             "ok": result.ok,
             "flags": _flags_to_dict(flags),
@@ -448,7 +462,12 @@ class FilesystemHandlers:
         old_patch = self._read_full_if_exists(full_patch)
         existed = old_patch is not None
         if existed:
-            self.lxd.exec(self.container, ["rm", "-f", full_patch], check=False)
+            self.lxd.exec(
+                self.container,
+                ["rm", "-f", full_patch],
+                check=False,
+                timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+            )
             display.file_written(rel_patch, old_patch, "")
 
         return {
@@ -462,7 +481,12 @@ class FilesystemHandlers:
     # ------------------------------------------------------------------
 
     def _read_full_if_exists(self, full_path: str) -> str | None:
-        result = self.lxd.exec(self.container, ["cat", full_path], check=False)
+        result = self.lxd.exec(
+            self.container,
+            ["cat", full_path],
+            check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+        )
         if not result.ok:
             return None
         return result.stdout

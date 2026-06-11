@@ -10,7 +10,7 @@ from . import display, preflight as pf, prompts, validation
 from .budget import Budget
 from .build_runner import BuildRunner, first_error_line
 from .build_steps import CONTAINER_CCACHE_DIR
-from .config import Config
+from .config import TOOL_EXEC_TIMEOUT_SECONDS, Config
 from .loop import run_loop
 from .lxd import LXDError, LXDManager
 from .output.launchpad_bug import BugPayload, file_bug
@@ -303,6 +303,7 @@ def _capture_file_tree(lxd: LXDManager, container: str, cfg: Config) -> str:
             "*/.git/*",
         ],
         check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )
     return result.stdout
 
@@ -312,6 +313,7 @@ def _capture_patch_series(lxd: LXDManager, container: str, cfg: Config) -> str:
         container,
         ["cat", f"{cfg.container_workdir}/debian/patches/series"],
         check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )
     return result.stdout if result.ok else ""
 
@@ -365,7 +367,12 @@ def _diff_stage_script(workdir: str) -> str:
 
 def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
     """Capture the model's accumulated changes as a unified diff against HEAD."""
-    result = lxd.exec_shell(container, _diff_stage_script(cfg.container_workdir), check=False)
+    result = lxd.exec_shell(
+        container,
+        _diff_stage_script(cfg.container_workdir),
+        check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+    )
     return result.stdout
 
 

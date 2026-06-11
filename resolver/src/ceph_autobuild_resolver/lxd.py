@@ -31,6 +31,9 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
+    # True when a per-exec timeout was requested and the command was killed
+    # by coreutils ``timeout`` (rc 124, or 137 after the -k grace period).
+    timed_out: bool = False
 
     @property
     def ok(self) -> bool:
@@ -259,7 +262,15 @@ class LXDManager:
         env: Mapping[str, str] | None = None,
         check: bool = False,
         cwd: str | None = None,
+        timeout: int | None = None,
     ) -> ExecResult:
+        # pylxd's execute() blocks on the operation websocket with no timeout
+        # of its own, so a hung command would stall the loop forever (the
+        # wall-clock budget is only checked between turns). Enforce the cap
+        # in-container with coreutils timeout: rc 124 on expiry, 137 if the
+        # process ignored TERM and was KILLed after the grace period.
+        if timeout:
+            argv = ["timeout", "-k", "10", str(timeout), *argv]
         try:
             raw = self._instance(container).execute(
                 argv,
@@ -273,6 +284,7 @@ class LXDManager:
             returncode=int(raw.exit_code),
             stdout=raw.stdout or "",
             stderr=raw.stderr or "",
+            timed_out=bool(timeout) and int(raw.exit_code) in (124, 137),
         )
         if check and not result.ok:
             raise LXDError(
@@ -289,9 +301,15 @@ class LXDManager:
         env: Mapping[str, str] | None = None,
         check: bool = False,
         cwd: str | None = None,
+        timeout: int | None = None,
     ) -> ExecResult:
         return self.exec(
-            container, ["bash", "-c", script], env=env, check=check, cwd=cwd
+            container,
+            ["bash", "-c", script],
+            env=env,
+            check=check,
+            cwd=cwd,
+            timeout=timeout,
         )
 
 

@@ -9,6 +9,7 @@ from typing import Any
 
 from .. import guards
 from ..build_runner import BuildOutcome, BuildRunner
+from ..config import TOOL_EXEC_TIMEOUT_SECONDS
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +77,16 @@ class ExecutionHandlers:
             ["bash", "-c", cmd],
             cwd=workdir,
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
+        if result.timed_out:
+            return {
+                "ok": False,
+                "output": (
+                    f"check_patch exceeded {TOOL_EXEC_TIMEOUT_SECONDS}s and "
+                    "was killed."
+                ),
+            }
         return {
             "ok": result.ok,
             "output": (result.stdout + result.stderr).strip(),
@@ -90,5 +100,6 @@ class ExecutionHandlers:
             self.container,
             f"cd {self.runner.cfg.container_workdir}/.. && rm -f *.buildinfo *.changes *.deb",
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         return {"ok": result.ok}

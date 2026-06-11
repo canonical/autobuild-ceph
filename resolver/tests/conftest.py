@@ -37,6 +37,8 @@ class FakeLXD:
         default_factory=dict
     )
     files_written: dict[str, str] = field(default_factory=dict)
+    # (argv[0], timeout) per exec call, so tests can assert timeout plumbing.
+    exec_timeouts: list[tuple[str, int | None]] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Path translation
@@ -89,9 +91,11 @@ class FakeLXD:
         env: Mapping[str, str] | None = None,
         check: bool = False,
         cwd: str | None = None,
+        timeout: int | None = None,
     ) -> ExecResult:
         key = " ".join(argv)
         self.exec_log.append((container, list(argv)))
+        self.exec_timeouts.append((argv[0] if argv else "", timeout))
         for prefix, override in self.exec_overrides.items():
             if key.startswith(prefix):
                 return override(argv)
@@ -120,9 +124,15 @@ class FakeLXD:
         env: Mapping[str, str] | None = None,
         check: bool = False,
         cwd: str | None = None,
+        timeout: int | None = None,
     ) -> ExecResult:
         return self.exec(
-            container, ["bash", "-c", script], env=env, check=check, cwd=cwd
+            container,
+            ["bash", "-c", script],
+            env=env,
+            check=check,
+            cwd=cwd,
+            timeout=timeout,
         )
 
     # Lifecycle ops are no-ops in the fake; tests that care override.

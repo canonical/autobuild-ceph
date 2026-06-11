@@ -19,7 +19,7 @@ from .build_steps import (
     install_dependencies_stage,
     prepare_tarball_stage,
 )
-from .config import Config
+from .config import BUILD_STEP_TIMEOUT_SECONDS, Config
 from .lxd import ExecResult, LXDManager
 
 log = logging.getLogger(__name__)
@@ -292,11 +292,21 @@ class BuildRunner:
 
         for step in stage.steps:
             display.step_start(step.argv)
-            result = self._lxd.exec(container, step.argv, cwd=step.workdir)
+            result = self._lxd.exec(
+                container,
+                step.argv,
+                cwd=step.workdir,
+                timeout=BUILD_STEP_TIMEOUT_SECONDS,
+            )
             display.step_done(result.ok, result.returncode, result.stdout + result.stderr)
             buf += f"=== step: {step.argv} ===\n{result.stdout}"
             if result.stderr:
                 buf += result.stderr + "\n"
+            if result.timed_out:
+                buf += (
+                    f"=== step timed out after {BUILD_STEP_TIMEOUT_SECONDS}s "
+                    "and was killed ===\n"
+                )
             self._lxd.put_text(container, log_path, buf)
             if not result.ok and not step.allow_failure:
                 return ExecResult(result.returncode, buf, result.stderr)

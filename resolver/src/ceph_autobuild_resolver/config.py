@@ -12,6 +12,17 @@ from typing import Literal
 
 ProviderName = Literal["openrouter", "gemini"]
 
+# Per-exec timeouts (seconds), enforced in-container via coreutils ``timeout``
+# (see LXDManager.exec). pylxd's execute() otherwise blocks forever on a hung
+# command, and the loop's wall-clock budget is only checked between turns.
+#
+# TOOL_EXEC_TIMEOUT_SECONDS: short cap for model tool calls (reads, greps,
+# patch dry-runs) -- none of these should take more than a couple of minutes.
+# BUILD_STEP_TIMEOUT_SECONDS: generous cap for a single build/prep step;
+# a full Ceph compile fits comfortably, a wedged debuild does not run forever.
+TOOL_EXEC_TIMEOUT_SECONDS = 120
+BUILD_STEP_TIMEOUT_SECONDS = 6 * 3600
+
 
 class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
