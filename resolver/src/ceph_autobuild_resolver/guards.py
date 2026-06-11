@@ -43,6 +43,38 @@ def normalize(path: str) -> str:
     return path.lstrip("/")
 
 
+def contained_relpath(path: str, workdir: str | None = None) -> str:
+    """Normalize a read-side path and refuse anything outside the workspace.
+
+    Unlike :func:`assert_in_scope` (which restricts *writes* to ``debian/``),
+    read tools may touch the whole working tree — but never beyond it: build
+    logs are PR-controlled input to the model, so traversal out of the tree
+    (e.g. onto the host ccache bind-mount via ``../ccache``) must be treated
+    as adversarial. ``..`` segments are always rejected, and an absolute path
+    is accepted only when it points inside ``workdir``; the workdir prefix is
+    stripped so callers always get a workdir-relative path back.
+    """
+    is_abs = path.startswith("/")
+    p = normalize(path)
+    if ".." in p.split("/"):
+        raise EditScopeViolation(
+            f"path {path!r} contains '..' — reads are restricted to the "
+            "build workspace"
+        )
+    if workdir:
+        workdir_rel = normalize(workdir)
+        if p == workdir_rel:
+            return ""
+        if p.startswith(workdir_rel + "/"):
+            return p[len(workdir_rel) + 1:]
+        if is_abs:
+            raise EditScopeViolation(
+                f"absolute path {path!r} is outside the workspace "
+                f"{workdir!r} — pass a path relative to the working tree"
+            )
+    return p
+
+
 # Script extensions that must never be written into the working tree.
 # The model occasionally tries to create helper programs to work around
 # tool limitations; this guard catches those attempts early.

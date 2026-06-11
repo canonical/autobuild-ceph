@@ -135,3 +135,19 @@ def test_git_log_returns_commits(fake_lxd, cfg):
     assert "commits" in out
     assert len(out["commits"]) == 1
     assert out["commits"][0]["subject"] == "first"
+
+
+def test_grep_rejects_traversal(search):
+    from ceph_autobuild_resolver import guards
+
+    with pytest.raises(guards.EditScopeViolation):
+        search.grep("x", path="../ccache")
+    with pytest.raises(guards.EditScopeViolation):
+        search.grep("x", path="/etc")
+
+
+def test_git_log_rejects_traversal(search):
+    from ceph_autobuild_resolver import guards
+
+    with pytest.raises(guards.EditScopeViolation):
+        search.git_log(path="../ccache")

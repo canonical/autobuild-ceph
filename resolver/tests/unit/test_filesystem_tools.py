@@ -297,3 +297,17 @@ def test_drop_patch_when_only_series_has_entry(fake_lxd, fs):
         Path(fake_lxd.root) / "root/ceph/debian/patches/series"
     ).read_text()
     assert "ghost" not in series
+
+
+def test_read_files_rejects_traversal_per_path(fake_lxd, fs):
+    _seed_file(fake_lxd, "debian/control", "Source: ceph\n")
+    out = fs.read_files(["../ccache/secret", "debian/control"])
+    assert "error" in out["files"][0]
+    assert ".." in out["files"][0]["error"]
+    assert out["files"][1]["content"] == "Source: ceph\n"
+
+
+def test_read_files_rejects_absolute_outside_workdir(fs):
+    out = fs.read_files(["/etc/passwd"])
+    assert "error" in out["files"][0]
+    assert "outside the workspace" in out["files"][0]["error"]

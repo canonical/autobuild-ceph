@@ -41,15 +41,15 @@ class FilesystemHandlers:
 
         files: list[dict[str, Any]] = []
         for raw in paths:
-            rel = guards.normalize(raw)
-            # If the model passed an absolute path that includes the workdir
-            # prefix (e.g. "/root/ceph/debian/control"), strip the prefix so
-            # we don't double-prepend and produce a non-existent path.
-            workdir_rel = self.cfg.container_workdir.lstrip("/")
-            if rel.startswith(workdir_rel + "/"):
-                rel = rel[len(workdir_rel) + 1:]
-            elif rel == workdir_rel:
-                rel = ""
+            # contained_relpath also strips a workdir prefix from absolute
+            # paths (e.g. "/root/ceph/debian/control") so we don't
+            # double-prepend below. A traversal or out-of-workspace path is
+            # a per-file error, not a whole-call failure.
+            try:
+                rel = guards.contained_relpath(raw, self.cfg.container_workdir)
+            except guards.EditScopeViolation as exc:
+                files.append({"path": raw, "error": str(exc)})
+                continue
             full = f"{self.cfg.container_workdir}/{rel}"
             count_res = self.lxd.exec(
                 self.container, ["wc", "-l", full], check=False

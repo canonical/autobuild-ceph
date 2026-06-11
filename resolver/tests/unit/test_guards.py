@@ -84,3 +84,23 @@ def test_evaluate_flags_quiet_on_unrelated_changes():
         old_content=old,
     )
     assert flags.debian_control_version_change is False
+
+
+def test_contained_relpath_rejects_dotdot():
+    with pytest.raises(guards.EditScopeViolation):
+        guards.contained_relpath("../ccache/foo", "/root/ceph")
+    with pytest.raises(guards.EditScopeViolation):
+        guards.contained_relpath("debian/../../etc/passwd", "/root/ceph")
+
+
+def test_contained_relpath_rejects_absolute_outside_workdir():
+    with pytest.raises(guards.EditScopeViolation):
+        guards.contained_relpath("/etc/passwd", "/root/ceph")
+    with pytest.raises(guards.EditScopeViolation):
+        guards.contained_relpath("/root/ccache/x", "/root/ceph")
+
+
+def test_contained_relpath_strips_workdir_prefix():
+    assert guards.contained_relpath("/root/ceph/debian/control", "/root/ceph") == "debian/control"
+    assert guards.contained_relpath("/root/ceph", "/root/ceph") == ""
+    assert guards.contained_relpath("debian/control", "/root/ceph") == "debian/control"
