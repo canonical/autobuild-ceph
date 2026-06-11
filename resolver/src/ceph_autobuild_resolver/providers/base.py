@@ -114,6 +114,11 @@ class Message:
     # back on subsequent turns when the model used thinking + tool calls.
     # Anthropic and Gemini both reject the next turn otherwise.
     reasoning_details: list[dict[str, Any]] = field(default_factory=list)
+    # Gemini thought_signature attached to a *text* part (signatures on
+    # function-call parts live on ToolCall.thought_signature). Gemini requires
+    # signatures to be echoed back wherever they appeared, so the adapter
+    # replays this on the text Part when reconstructing the turn.
+    thought_signature: bytes | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)
 
