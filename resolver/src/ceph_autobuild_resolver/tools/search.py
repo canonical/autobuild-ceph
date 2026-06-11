@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import guards
-from ..config import Config
+from ..config import TOOL_EXEC_TIMEOUT_SECONDS, Config
 from ..lxd import LXDManager
 
 log = logging.getLogger(__name__)
@@ -63,7 +63,17 @@ class SearchHandlers:
             f"{self.cfg.container_workdir}/{path}",
         ]
         # grep returns 1 when there are no matches, which is not an error.
-        result = self.lxd.exec(self.container, argv, check=False)
+        result = self.lxd.exec(
+            self.container, argv, check=False, timeout=TOOL_EXEC_TIMEOUT_SECONDS
+        )
+        if result.timed_out:
+            return {
+                "error": "timeout",
+                "message": (
+                    f"grep exceeded {TOOL_EXEC_TIMEOUT_SECONDS}s and was "
+                    "killed. Narrow the pattern or path and retry."
+                ),
+            }
         all_lines = result.stdout.splitlines()
         # Sometimes grep emits paths as absolute (because we pass an absolute
         # search root). Strip the workdir prefix so the model sees repo-rel.
@@ -147,8 +157,18 @@ class SearchHandlers:
         ]
         if path:
             argv.extend(["--", path])
-        result = self.lxd.exec(self.container, argv, check=False)
+        result = self.lxd.exec(
+            self.container, argv, check=False, timeout=TOOL_EXEC_TIMEOUT_SECONDS
+        )
         if not result.ok:
+            if result.timed_out:
+                return {
+                    "error": "timeout",
+                    "message": (
+                        f"git log exceeded {TOOL_EXEC_TIMEOUT_SECONDS}s and "
+                        "was killed. Narrow the path or count and retry."
+                    ),
+                }
             return {"error": result.stderr.strip() or "git log failed"}
         commits = []
         for raw in result.stdout.splitlines():

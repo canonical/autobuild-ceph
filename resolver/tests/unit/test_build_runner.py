@@ -34,13 +34,14 @@ class _MinimalLXD:
         env: Mapping[str, str] | None = None,
         check: bool = False,
         cwd: str | None = None,
+        timeout: int | None = None,
     ) -> ExecResult:
         self.calls.append((list(argv), cwd))
         if self.step_results:
             return self.step_results.pop(0)
         return ExecResult(0, f"ok: {argv[0]}\n", "")
 
-    def exec_shell(self, container, script, *, env=None, check=False, cwd=None):
+    def exec_shell(self, container, script, *, env=None, check=False, cwd=None, timeout=None):
         return self.exec(container, ["bash", "-c", script], cwd=cwd)
 
     def put_text(self, container: str, remote_path: str, content: str) -> None:
@@ -315,3 +316,16 @@ def test_build_log_tail_truncated(cfg):
     outcome = runner.build(CONTAINER)
 
     assert outcome.log_tail.count("\n") <= 500
+
+
+def test_build_steps_request_build_timeout(fake_lxd, cfg):
+    """Every build step must carry the generous build-step timeout so a hung
+    debuild cannot stall the loop forever."""
+    from ceph_autobuild_resolver.build_runner import BuildRunner
+    from ceph_autobuild_resolver.config import BUILD_STEP_TIMEOUT_SECONDS
+
+    runner = BuildRunner(fake_lxd, cfg)
+    runner.build("ceph-build")
+    step_timeouts = [t for (cmd, t) in fake_lxd.exec_timeouts if cmd not in ("bash",)]
+    assert step_timeouts, "no build steps executed"
+    assert all(t == BUILD_STEP_TIMEOUT_SECONDS for t in step_timeouts)

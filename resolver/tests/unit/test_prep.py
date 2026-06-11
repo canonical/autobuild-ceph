@@ -30,11 +30,11 @@ class StubLXD:
         self.snapshots_created.append((name, snapshot))
         self.snapshot_exists = True
 
-    def exec(self, container, argv, *, env=None, check=False, cwd=None) -> ExecResult:
+    def exec(self, container, argv, *, env=None, check=False, cwd=None, timeout=None) -> ExecResult:
         self.execs.append(list(argv))
         return ExecResult(self.exec_returncode, "", "")
 
-    def exec_shell(self, container, script, *, env=None, check=False, cwd=None) -> ExecResult:
+    def exec_shell(self, container, script, *, env=None, check=False, cwd=None, timeout=None) -> ExecResult:
         self.execs.append(["bash", "-c", script])
         return ExecResult(self.exec_returncode, "", "")
 
