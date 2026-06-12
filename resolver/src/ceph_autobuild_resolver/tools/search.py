@@ -52,7 +52,10 @@ class SearchHandlers:
         # We rely on grep's recursive mode and let the shell's path resolution
         # apply relative to the workdir. ``-n`` prefixes line numbers; ``-H``
         # ensures path is always shown (even on a single-file target).
-        flags = ["-rnH", "--binary-files=without-match"]
+        # Exclude .git: a broad pattern on a freshly cloned tree would
+        # otherwise recurse the entire object/log store, wasting the tool
+        # timeout on irrelevant matches. Matches _capture_file_tree's exclusion.
+        flags = ["-rnH", "--binary-files=without-match", "--exclude-dir=.git"]
         if case_insensitive:
             flags.append("-i")
         argv = [

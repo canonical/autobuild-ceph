@@ -151,3 +151,12 @@ def test_git_log_rejects_traversal(search):
 
     with pytest.raises(guards.EditScopeViolation):
         search.git_log(path="../ccache")
+
+
+def test_grep_excludes_dot_git(fake_lxd, search):
+    _seed(fake_lxd, "debian/real.txt", "needle here\n")
+    _seed(fake_lxd, ".git/config", "needle in git metadata\n")
+    out = search.grep("needle")
+    files = out["files_with_matches"]
+    assert "debian/real.txt" in files
+    assert not any(".git" in f for f in files)
