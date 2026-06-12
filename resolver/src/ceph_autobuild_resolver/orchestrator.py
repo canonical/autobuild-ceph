@@ -287,13 +287,44 @@ def _validate_and_publish(
 ) -> Outcome:
     """Validate via clean rebuild and either open a PR or file a bug."""
     diff = _capture_diff(lxd, container, cfg)
-    val = validation.validate(
-        lxd=lxd,
-        runner=runner,
-        pristine_container=container,
-        pristine_snapshot=pristine_snapshot,
-        diff=diff,
-    )
+    # Persist the diff to the CI artifact path immediately, BEFORE validation.
+    # validation.validate does LXD snapshot-copy/exec that can raise LXDError
+    # on a transient infra fault; without this the captured diff (the entire
+    # result of a multi-hour run) lives only in this local var and is lost.
+    from .output import ci_output
+    ci_output.write_diff_artifact(diff)
+    try:
+        val = validation.validate(
+            lxd=lxd,
+            runner=runner,
+            pristine_container=container,
+            pristine_snapshot=pristine_snapshot,
+            diff=diff,
+        )
+    except LXDError as exc:
+        # Infra fault, not a bad fix. Don't claim success (validation is the
+        # safety gate) but don't discard the work either: the diff artifact is
+        # already written, and we file a distinct validation_error outcome.
+        log.exception("validation could not run due to LXD fault: %s", exc)
+        transcript.outcome("validation_error")
+        if emit_summary:
+            emit_summary(
+                success=False,
+                stop_reason="validation_error",
+                diff=diff,
+                last_error=str(exc),
+            )
+        file_bug(
+            BugPayload(
+                matrix_name=matrix_name,
+                failing_command="validation",
+                error_tail=f"validation could not run (LXD infra fault): {exc}",
+                transcript_path=str(transcript.path),
+                stop_reason="validation_error",
+            ),
+            dry_run=dry_run_output,
+        )
+        return Outcome(1, "validation could not run due to infra fault")
     transcript.validation(
         ok=val.ok,
         stage=val.build_outcome.stage,

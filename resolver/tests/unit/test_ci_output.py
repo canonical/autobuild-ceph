@@ -93,3 +93,24 @@ def test_every_loop_stop_reason_has_a_recommendation():
         "resolver_crash",
     ):
         assert reason in _RECOMMENDATIONS, reason
+
+
+def test_write_diff_artifact_writes_when_env_set(monkeypatch, tmp_path):
+    from ceph_autobuild_resolver.output.ci_output import write_diff_artifact
+
+    target = tmp_path / "out.patch"
+    monkeypatch.setenv("CI_DIFF_FILE", str(target))
+    assert write_diff_artifact("diff --git a/x b/x\n+Jørgen\n") is True
+    assert target.read_text(encoding="utf-8").startswith("diff --git")
+    assert "Jørgen" in target.read_text(encoding="utf-8")
+
+
+def test_write_diff_artifact_noop_without_env(monkeypatch):
+    from ceph_autobuild_resolver.output.ci_output import write_diff_artifact
+
+    monkeypatch.delenv("CI_DIFF_FILE", raising=False)
+    assert write_diff_artifact("anything") is False
+
+
+def test_validation_error_has_recommendation():
+    assert "validation_error" in _RECOMMENDATIONS
