@@ -152,12 +152,16 @@ def _to_content(msg: Message) -> types.Content:
 
     if msg.role == "model":
         parts: list[types.Part] = []
-        if msg.text:
-            # Echo back any signature that arrived on the text part; Gemini
-            # requires signatures wherever they appeared, not only on
-            # function-call parts.
+        # Echo back any signature that arrived on the text/thought part; Gemini
+        # requires signatures wherever they appeared, not only on function-call
+        # parts. The common agentic turn is tool-calls with no prose (text=None)
+        # but a thought_signature -- we must still emit a carrying Part, so fall
+        # back to a space (Gemini rejects empty-text parts) when a signature is
+        # present without text.
+        text = msg.text or (" " if msg.thought_signature else None)
+        if text is not None:
             parts.append(types.Part(
-                text=msg.text,
+                text=text,
                 thought_signature=msg.thought_signature,
             ))
         for tc in msg.tool_calls:
