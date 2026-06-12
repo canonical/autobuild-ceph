@@ -47,25 +47,19 @@ def run(
     lxd = LXDManager()
     runner = BuildRunner(lxd, cfg)
 
-    # 0. Restore the iteration container to its post-prep snapshot. The
-    #    container is reused across resolve invocations and accumulates state
-    #    — partially applied quilt patches, leftover .pc/, modified upstream
-    #    files our git-checkout reset can miss. Restoring from snapshot
-    #    guarantees every resolve starts from the same clean state without
-    #    paying the cost of a full re-prep (clone + tarball + apt installs).
-    #    Best-effort: if the snapshot is missing we log and continue.
-    try:
-        log.info(
-            "restoring %s to snapshot %s for clean start",
-            container, pristine_snapshot,
-        )
-        lxd.restore_snapshot(container, pristine_snapshot)
-    except LXDError as exc:
-        log.warning(
-            "could not restore %s/%s: %s — proceeding with current "
-            "container state (may have stale modifications from prior runs)",
-            container, pristine_snapshot, exc,
-        )
+    # 0. Restore the iteration container to its post-prep snapshot, so every
+    #    resolve starts from the same clean state (no partially-applied quilt
+    #    patches, leftover .pc/, or upstream edits our git reset can miss).
+    #    Fail hard if this can't happen: running on a dirty container produces
+    #    false positives/negatives (a build passing or failing for reasons
+    #    unrelated to the fix), which is worse than a clean abort on a paid
+    #    multi-hour run. The LXDError propagates to the CLI handler, which
+    #    records a resolver_crash artifact.
+    log.info(
+        "restoring %s to snapshot %s for clean start",
+        container, pristine_snapshot,
+    )
+    lxd.restore_snapshot(container, pristine_snapshot)
 
     if cfg.ccache_host_dir:
         from .prep import _prepare_ccache_dir
