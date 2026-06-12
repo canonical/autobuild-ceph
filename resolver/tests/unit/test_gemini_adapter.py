@@ -119,3 +119,21 @@ def test_overflow_marker_ignores_unrelated_maximum_phrasings():
         400, "Value exceeds the maximum allowed range for parameter temperature."
     )
     assert _is_token_limit_error(exc) is False
+
+
+def test_to_content_echoes_thought_signature_on_tool_only_turn():
+    """The dominant agentic turn is tool calls with no prose (text=None) plus a
+    thought_signature. The signature must still be echoed on a carrying Part, or
+    Gemini rejects the next turn for a thinking model."""
+    from ceph_autobuild_resolver.providers.base import Message, ToolCall
+    from ceph_autobuild_resolver.providers.gemini import _to_content
+
+    msg = Message(
+        role="model",
+        text=None,
+        thought_signature=b"thought_sig",
+        tool_calls=[ToolCall(id="c1", name="run_build", args={})],
+    )
+    content = _to_content(msg)
+    sigs = [getattr(p, "thought_signature", None) for p in content.parts]
+    assert b"thought_sig" in sigs
