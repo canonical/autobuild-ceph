@@ -25,9 +25,12 @@ class _RecordingLXD:
     calls: list[tuple[str, dict | None]] = field(default_factory=list)
     pushes: int = 0
 
+    timeouts: list[tuple[str, int | None]] = field(default_factory=list)
+
     def exec(self, container, argv, *, env=None, check=False, cwd=None, timeout=None):
         cmd = " ".join(argv)
         self.calls.append((cmd, dict(env) if env else None))
+        self.timeouts.append((cmd, timeout))
         if "command -v quilt" in cmd:
             return ExecResult(0, "/usr/bin/quilt", "")
         if "quilt push --fuzz=0" in cmd:
@@ -77,3 +80,14 @@ def test_phase2_refresh_path_also_carries_env(cfg):
     for cmd, env in _quilt_calls(lxd):
         assert env is not None and env.get("QUILT_PATCHES") == "debian/patches", cmd
     assert result.refreshed == ["p1"]
+
+
+def test_phase2_exec_calls_carry_a_timeout(cfg):
+    """Every preflight container exec must pass a timeout: the quilt loop runs
+    before the loop's wall-clock budget is armed, so an unguarded hung command
+    would stall the whole run (the d649a99 timeout sweep missed preflight)."""
+    lxd = _RecordingLXD()
+    preflight.run(lxd, "ceph-build", cfg, "p1\np2\n")
+    # No container exec in preflight may be unbounded.
+    unbounded = [cmd for cmd, t in lxd.timeouts if t is None]
+    assert unbounded == [], f"unbounded preflight execs: {unbounded}"

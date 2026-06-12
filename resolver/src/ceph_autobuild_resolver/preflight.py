@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from . import display
 from .build_steps import TREE_RESET_SCRIPT
-from .config import Config
+from .config import BUILD_STEP_TIMEOUT_SECONDS, TOOL_EXEC_TIMEOUT_SECONDS, Config
 from .lxd import LXDError, LXDManager
 from .transcript import Transcript
 
@@ -139,6 +139,7 @@ def _run_patch_preflight(
             ["bash", "-c", f"patch -F 0 -p1 --dry-run < {shlex.quote(full)}"],
             cwd=workdir,
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         combined = (result.stdout + result.stderr).strip()
         if not result.ok and (
@@ -186,6 +187,7 @@ def _run_patch_preflight(
             cwd=workdir,
             env=quilt_env,
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         if strict.ok:
             statuses[patch] = "OK"
@@ -197,6 +199,7 @@ def _run_patch_preflight(
             cwd=workdir,
             env=quilt_env,
             check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
         if forced.ok:
             refresh = lxd.exec(
@@ -205,6 +208,7 @@ def _run_patch_preflight(
                 cwd=workdir,
                 env=quilt_env,
                 check=False,
+                timeout=TOOL_EXEC_TIMEOUT_SECONDS,
             )
             if refresh.ok:
                 log.info(
@@ -242,7 +246,10 @@ def _run_patch_preflight(
 
 
 def _ensure_quilt(lxd: LXDManager, container: str) -> bool:
-    have = lxd.exec(container, ["bash", "-c", "command -v quilt"], check=False)
+    have = lxd.exec(
+        container, ["bash", "-c", "command -v quilt"], check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+    )
     if have.ok:
         return True
     log.info("preflight: quilt not present in container, installing")
@@ -250,6 +257,7 @@ def _ensure_quilt(lxd: LXDManager, container: str) -> bool:
         container,
         ["bash", "-c", "sudo apt-get install -y quilt"],
         check=False,
+        timeout=BUILD_STEP_TIMEOUT_SECONDS,
     )
     if not install.ok:
         log.warning(
@@ -257,13 +265,19 @@ def _ensure_quilt(lxd: LXDManager, container: str) -> bool:
             (install.stderr or install.stdout).strip()[:200],
         )
         return False
-    verify = lxd.exec(container, ["bash", "-c", "command -v quilt"], check=False)
+    verify = lxd.exec(
+        container, ["bash", "-c", "command -v quilt"], check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+    )
     return verify.ok
 
 
 def _reset_tree(lxd: LXDManager, container: str, workdir: str) -> None:
     """Pop quilt state and restore upstream files to their committed form."""
-    lxd.exec(container, ["bash", "-c", TREE_RESET_SCRIPT], cwd=workdir, check=False)
+    lxd.exec(
+        container, ["bash", "-c", TREE_RESET_SCRIPT], cwd=workdir, check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+    )
 
 
 def _first_failure_line(output: str) -> str:
@@ -280,7 +294,10 @@ def _drop_patch(
     """Remove ``patch_name`` from series and delete the patch file."""
     workdir = cfg.container_workdir
     series_path = f"{workdir}/debian/patches/series"
-    cur = lxd.exec(container, ["cat", series_path], check=False)
+    cur = lxd.exec(
+        container, ["cat", series_path], check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+    )
     if cur.ok:
         kept = [
             line for line in cur.stdout.splitlines() if line.strip() != patch_name
@@ -293,4 +310,5 @@ def _drop_patch(
         container,
         ["rm", "-f", f"{workdir}/debian/patches/{patch_name}"],
         check=False,
+        timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )

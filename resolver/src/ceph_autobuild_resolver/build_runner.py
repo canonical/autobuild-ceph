@@ -248,6 +248,8 @@ class BuildRunner:
             container,
             ["git", "apply", "--whitespace=nowarn", _DIFF_PATH],
             cwd=self._cfg.container_workdir,
+            check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
 
     def apply_diff(self, container: str, diff_text: str) -> ExecResult:
