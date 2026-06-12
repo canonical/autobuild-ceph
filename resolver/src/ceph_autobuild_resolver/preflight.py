@@ -172,11 +172,19 @@ def _run_patch_preflight(
     )
     _reset_tree(lxd, container, workdir)
 
+    # Quilt defaults to looking for ``patches/series``; Debian keeps it at
+    # ``debian/patches/series``. Quilt normally learns the location from
+    # ``.pc/.quilt_patches``, but _reset_tree just deleted ``.pc`` — without
+    # this env every quilt call fails with "No series file found" and the
+    # whole auto-refresh pass silently degrades to a no-op.
+    quilt_env = {"QUILT_PATCHES": "debian/patches"}
+
     for patch in surviving:
         strict = lxd.exec(
             container,
             ["bash", "-c", "quilt push --fuzz=0"],
             cwd=workdir,
+            env=quilt_env,
             check=False,
         )
         if strict.ok:
@@ -187,6 +195,7 @@ def _run_patch_preflight(
             container,
             ["bash", "-c", "quilt push -f --fuzz=2"],
             cwd=workdir,
+            env=quilt_env,
             check=False,
         )
         if forced.ok:
@@ -194,6 +203,7 @@ def _run_patch_preflight(
                 container,
                 ["bash", "-c", "quilt refresh"],
                 cwd=workdir,
+                env=quilt_env,
                 check=False,
             )
             if refresh.ok:
