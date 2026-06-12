@@ -228,7 +228,7 @@ def test_declare_resolved_rejected_with_unbuilt_changes(dispatcher):
     assert "changed since the last successful run_build" in outcome.results[0].payload["error"]
 
 
-def test_declare_resolved_rejected_in_same_batch_as_mutation(dispatcher, fake_lxd):
+def test_declare_resolved_rejected_in_same_batch_as_mutation(dispatcher):
     """edit + declare_resolved in one parallel batch: calls are processed in
     order, so the declare must see the pending edit and be rejected."""
     from ceph_autobuild_resolver.build_runner import BuildOutcome
