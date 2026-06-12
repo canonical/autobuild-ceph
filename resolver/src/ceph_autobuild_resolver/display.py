@@ -9,7 +9,11 @@ without ANSI colour — which is fine.
 from __future__ import annotations
 
 import difflib
+import os
 import re
+import sys
+import uuid
+from contextlib import contextmanager
 
 from rich.console import Console
 from rich.markup import escape
@@ -17,6 +21,28 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 
 _c = Console(stderr=True, highlight=False)
+
+
+@contextmanager
+def _neutralized():
+    """Stop the Actions runner interpreting workflow commands in wrapped output.
+
+    The runner scans BOTH stdout and stderr for ``::cmd::`` lines, and
+    rich.markup.escape only neutralises ``[...]`` (for Rich), not ``::`` -- so a
+    model reply containing ``::add-mask::`` or ``::error::`` could reach the
+    runner via the stderr UI. ci_output wraps the stdout sink the same way; this
+    covers stderr. No-op outside Actions to keep local output clean. The token
+    lines go to stderr (the stream Rich writes to) so they bracket the panels.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        yield
+        return
+    token = uuid.uuid4().hex
+    print(f"::stop-commands::{token}", file=sys.stderr, flush=True)
+    try:
+        yield
+    finally:
+        print(f"::{token}::", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -30,8 +56,11 @@ def startup_info(model: str, provider: str, ccache_host_dir: str | None) -> None
         if ccache_host_dir
         else "[dim]disabled[/dim]"
     )
+    # model is the MODEL_NAME env var; a bracketed id (gemini-x[preview]) would
+    # crash startup via MarkupError without escaping.
     _c.print(
-        f"  [bold]provider[/bold] {provider} · [bold]model[/bold] {model} · "
+        f"  [bold]provider[/bold] {escape(provider)} · "
+        f"[bold]model[/bold] {escape(model)} · "
         f"[bold]ccache[/bold] {ccache}"
     )
 
@@ -54,7 +83,8 @@ def step_done(ok: bool, returncode: int = 0, output: str = "") -> None:
         _c.print(f"    [bold red]✗  rc={returncode}[/bold red]")
         tail = output.strip()[-2000:] if output.strip() else ""
         if tail:
-            _c.print(escape(tail), style="dim red")
+            with _neutralized():
+                _c.print(escape(tail), style="dim red")
 
 
 # ---------------------------------------------------------------------------
@@ -66,26 +96,29 @@ def model_text(text: str) -> None:
     if not text.strip():
         return
     # Model text and build logs are untrusted: bracketed paths like
-    # [/usr/lib/ceph] are valid markup-closing tags and crash Rich.
-    _c.print(
-        Panel(
-            escape(text.strip()),
-            title="[bold cyan]model[/bold cyan]",
-            border_style="cyan",
+    # [/usr/lib/ceph] are valid markup-closing tags and crash Rich, and ::cmd::
+    # sequences could spoof Actions workflow commands on stderr.
+    with _neutralized():
+        _c.print(
+            Panel(
+                escape(text.strip()),
+                title="[bold cyan]model[/bold cyan]",
+                border_style="cyan",
+            )
         )
-    )
 
 
 def model_reasoning(text: str) -> None:
     if not text.strip():
         return
-    _c.print(
-        Panel(
-            escape(text.strip()),
-            title="[bold magenta]thinking[/bold magenta]",
-            border_style="magenta",
+    with _neutralized():
+        _c.print(
+            Panel(
+                escape(text.strip()),
+                title="[bold magenta]thinking[/bold magenta]",
+                border_style="magenta",
+            )
         )
-    )
 
 
 def token_usage(input_tokens: int, output_tokens: int, budget: int) -> None:
@@ -144,26 +177,28 @@ def preflight_summary(report: str, dropped: list[str], refreshed: list[str]) -> 
     if refreshed:
         badge_parts.append(f"[bold yellow]{len(refreshed)} refreshed[/bold yellow]")
     badge = f" — {' · '.join(badge_parts)}" if badge_parts else ""
-    _c.print(
-        Panel(
-            escape(report),
-            title=f"[bold magenta]preflight[/bold magenta]{badge}",
-            border_style="magenta",
+    with _neutralized():
+        _c.print(
+            Panel(
+                escape(report),
+                title=f"[bold magenta]preflight[/bold magenta]{badge}",
+                border_style="magenta",
+            )
         )
-    )
 
 
 def build_result(ok: bool, stage: str, log_tail: str) -> None:
     color = "green" if ok else "red"
     status = "PASSED" if ok else "FAILED"
     tail = log_tail[-3000:] if log_tail else "(no output)"
-    _c.print(
-        Panel(
-            escape(tail),
-            title=f"[bold {color}]build {status} @ {escape(stage)}[/bold {color}]",
-            border_style=color,
+    with _neutralized():
+        _c.print(
+            Panel(
+                escape(tail),
+                title=f"[bold {color}]build {status} @ {escape(stage)}[/bold {color}]",
+                border_style=color,
+            )
         )
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +267,14 @@ def run_summary(
         lines.append(f"  {escape(last_build_error.strip()[:200])}")
 
     body = "\n".join(lines).rstrip()
-    _c.print(
-        Panel(
-            body,
-            title=title,
-            border_style=color,
+    with _neutralized():
+        _c.print(
+            Panel(
+                body,
+                title=title,
+                border_style=color,
+            )
         )
-    )
 
 
 def _fmt_elapsed(seconds: float) -> str:
