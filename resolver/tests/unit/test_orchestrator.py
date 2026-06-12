@@ -274,7 +274,6 @@ def test_validation_lxd_fault_persists_diff_and_does_not_crash(monkeypatch, tmp_
         matrix_name="resolute",
         transcript=Transcript(tmp_path / "t.jsonl"),
         dry_run_output=True,
-        initial=BuildOutcome(ok=False, stage="build", returncode=1, log_path="", log_tail=""),
         summary="fixed it",
     )
 

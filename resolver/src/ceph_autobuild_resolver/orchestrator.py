@@ -111,7 +111,6 @@ def run(
                 matrix_name=matrix_name,
                 transcript=transcript,
                 dry_run_output=dry_run_output,
-                initial=initial,
                 summary=pf.format_summary(pf_result),
             )
         # Build still failing — refresh series + report for the model.
@@ -215,7 +214,6 @@ def run(
             matrix_name=matrix_name,
             transcript=transcript,
             dry_run_output=dry_run_output,
-            initial=initial,
             summary=summary,
             emit_summary=_emit_summary,
         )
@@ -265,7 +263,6 @@ def run(
         matrix_name=matrix_name,
         transcript=transcript,
         dry_run_output=dry_run_output,
-        initial=initial,
         summary=summary,
         emit_summary=_emit_summary,
     )
@@ -281,7 +278,6 @@ def _validate_and_publish(
     matrix_name: str,
     transcript: Transcript,
     dry_run_output: bool,
-    initial,  # BuildOutcome
     summary: str,
     emit_summary=None,
 ) -> Outcome:
