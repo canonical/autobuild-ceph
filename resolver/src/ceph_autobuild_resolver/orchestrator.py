@@ -222,22 +222,23 @@ def run(
 
     if not loop_result.declared_resolved:
         transcript.outcome("loop_failed", stop_reason=loop_result.stop_reason)
-        last_error = _last_build_error(loop_result.history)
+        # For declare_unresolvable, the model's explanation is more useful
+        # than the raw build log tail. Otherwise use the tail of the LAST
+        # executed failed build — after the model has iterated, the actual
+        # last error usually differs from the initial one, and the analysis
+        # must point the reader at the right failure.
+        last_tail = _failure_error_tail(
+            exec_handlers.last_build, loop_result.history, current_failure.log_tail
+        )
         _emit_summary(
             success=False,
             stop_reason=loop_result.stop_reason,
-            last_error=last_error,
+            last_error=first_error_line(last_tail) or _last_build_error(loop_result.history),
         )
-        # For declare_unresolvable, the model's explanation is more useful
-        # than the raw build log tail. Otherwise use the tail of the LAST
-        # failed build from the loop history — after the model has iterated,
-        # the actual last error usually differs from the initial one, and
-        # the analysis must point the reader at the right failure.
-        last_tail = _last_failed_build_tail(loop_result.history)
         error_tail = (
-            loop_result.resolution_summary or last_tail or current_failure.log_tail
+            loop_result.resolution_summary or last_tail
             if loop_result.stop_reason == "declared_unresolvable"
-            else (last_tail or current_failure.log_tail)
+            else last_tail
         )
         file_bug(
             BugPayload(
@@ -424,6 +425,21 @@ def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
         timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )
     return result.stdout
+
+
+def _failure_error_tail(last_build, history, fallback_tail: str) -> str:
+    """Tail of the most recent executed failed build.
+
+    Prefer the authoritative BuildOutcome held by the execution handlers:
+    loop-history compression can evict the corresponding tool result (a run
+    that ends with many diagnosis turns after its last build does exactly
+    that), in which case a history scan finds nothing and the report would
+    fall back to the pre-loop failure — pointing the reader at the wrong
+    error.
+    """
+    if last_build is not None and not last_build.ok and last_build.log_tail:
+        return last_build.log_tail
+    return _last_failed_build_tail(history) or fallback_tail
 
 
 def _last_failed_build_tail(history) -> str:
