@@ -24,6 +24,10 @@ DEFAULT_GIT_LOG_ENTRIES = 20
 HARD_MAX_MATCHES = 200  # ceiling on returned match entries, even if asked for more
 MAX_FILES_LISTED = 100  # ceiling on the files_with_matches list
 MAX_EXCERPT_CHARS = 500  # per-match excerpt is truncated to this many chars
+# grep_log forwards before/after_context straight to grep -B/-A and matches
+# straight to -m. These cap an explicit large value so a model cannot make grep
+# buffer a huge in-memory result before the exec timeout / payload clamp fire.
+HARD_MAX_CONTEXT_LINES = 100  # ceiling on grep_log before_context / after_context
 
 
 def all_tools() -> list[ToolSchema]:

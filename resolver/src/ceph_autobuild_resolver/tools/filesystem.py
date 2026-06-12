@@ -124,9 +124,20 @@ class FilesystemHandlers:
         of total matches. Defaults to case-insensitive because most build
         errors capitalise inconsistently (``error:``, ``ERROR:``, ``Error``).
         """
-        from .schema import DEFAULT_GREP_MATCHES
+        from .schema import (
+            DEFAULT_GREP_MATCHES,
+            HARD_MAX_CONTEXT_LINES,
+            HARD_MAX_MATCHES,
+        )
 
+        # Clamp every input the model controls: an explicit large value
+        # (e.g. after_context=5000, max_matches=10000) would make grep buffer a
+        # huge result into stdout before the exec timeout / 256 KB payload clamp
+        # can fire. Mirrors the caps the workspace grep already applies.
         max_matches = max_matches or DEFAULT_GREP_MATCHES
+        max_matches = max(1, min(max_matches, HARD_MAX_MATCHES))
+        before_context = max(0, min(before_context, HARD_MAX_CONTEXT_LINES))
+        after_context = max(0, min(after_context, HARD_MAX_CONTEXT_LINES))
         # ``-b`` prints byte offsets so the model can read_log around any
         # match. ``-A``/``-B`` give surrounding context. ``-m`` caps grep's
         # own work — we still slice in Python in case multiple match groups

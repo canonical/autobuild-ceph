@@ -468,3 +468,28 @@ def test_apply_patch_accepts_valid_debian_diff(fake_lxd, fs, tmp_path):
     out = fs.apply_patch(diff)
     assert out["ok"] is True, out
     assert (repo / "debian/rules").read_text() == "patched\n"
+
+
+def test_grep_log_clamps_context_and_matches(fake_lxd, fs):
+    from ceph_autobuild_resolver.tools.schema import (
+        HARD_MAX_CONTEXT_LINES,
+        HARD_MAX_MATCHES,
+    )
+
+    _seed_file(fake_lxd, "../build-logs/build.log", "error: boom\n")
+    log_path = "/root/build-logs/build.log"
+    fs.grep_log(
+        log_path=log_path,
+        pattern="error",
+        before_context=9000,
+        after_context=9000,
+        max_matches=100000,
+    )
+    # The grep argv the handler built must carry clamped flags, not the raw
+    # 9000/100000 the model asked for.
+    grep_calls = [argv for _c, argv in fake_lxd.exec_log if argv and argv[0] == "grep"]
+    assert grep_calls, "grep_log did not invoke grep"
+    argv = grep_calls[-1]
+    assert f"-A{HARD_MAX_CONTEXT_LINES}" in argv
+    assert f"-B{HARD_MAX_CONTEXT_LINES}" in argv
+    assert f"-m{HARD_MAX_MATCHES}" in argv
