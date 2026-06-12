@@ -65,3 +65,28 @@ def test_run_summary_survives_markup_like_input():
 
 def test_startup_info_survives_markup_like_ccache_dir():
     display.startup_info("m", "p", "/tmp/[ccache]")
+
+
+def test_startup_info_survives_markup_like_model_name():
+    # MODEL_NAME can contain brackets (e.g. gemini-x[preview]); must not crash.
+    display.startup_info("gemini-3.1[preview-05-20]", "gemini", None)
+    display.startup_info(_HOSTILE, "gemini", None)
+
+
+def test_model_text_neutralizes_workflow_commands_under_actions(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    display.model_text("here is a fix\n::add-mask::secret\n::error::spoofed")
+    err = capsys.readouterr().err
+    import re as _re
+    m = _re.search(r"::stop-commands::([0-9a-f]{32})", err)
+    assert m, "stop-commands token missing on stderr"
+    token = m.group(1)
+    # The model's ::add-mask:: sits inside the neutralized window.
+    assert err.index(f"::stop-commands::{token}") < err.index("add-mask")
+    assert err.index("add-mask") < err.index(f"::{token}::")
+
+
+def test_no_neutralization_markers_outside_actions(monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    display.model_text("plain output")
+    assert "::stop-commands::" not in capsys.readouterr().err
