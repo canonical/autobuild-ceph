@@ -167,7 +167,7 @@ class Dispatcher:
         unresolvable = False
         unresolvable_reason: str | None = None
 
-        for call in calls:
+        for idx, call in enumerate(calls):
             log.info("dispatch %s args=%s", call.name, call.args)
             display.tool_dispatch(call.name, call.args)
 
@@ -220,11 +220,18 @@ class Dispatcher:
                         )
                     )
                     continue
-                if self._execution.files_changed_since_last_build:
+                later_mutates = any(
+                    c.name in _FILE_MUTATORS for c in calls[idx + 1:]
+                )
+                if self._execution.files_changed_since_last_build or later_mutates:
                     # A successful build followed by further edits is NOT a
                     # verified fix: the stray edits would land in the captured
                     # diff untested, and validation would catch it only at the
                     # cost of a full rebuild misreported as validation_failed.
+                    # The later_mutates check closes the intra-turn ordering
+                    # hole: calls run in array order, so a batch of
+                    # [declare_resolved, edit_file] would otherwise accept the
+                    # terminal call before the edit set the changed flag.
                     results.append(
                         ToolResult(
                             call_id=call.id,

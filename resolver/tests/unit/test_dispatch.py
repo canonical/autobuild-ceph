@@ -271,3 +271,24 @@ def test_declare_resolved_accepted_after_clean_build(dispatcher):
         [ToolCall(id="c1", name="declare_resolved", args={"summary": "done"})]
     )
     assert outcome.declared_resolved is True
+
+
+def test_declare_resolved_rejected_when_later_batch_call_mutates(dispatcher):
+    """Intra-turn ordering: [declare_resolved, write_file] in one batch must be
+    rejected -- calls run in array order, so without a look-ahead the terminal
+    call would be accepted before the edit lands in the captured diff untested."""
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True, stage="build", returncode=0,
+        log_path="/root/build-logs/build.log", log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = False
+
+    outcome = dispatcher.dispatch([
+        ToolCall(id="c1", name="declare_resolved", args={"summary": "done"}),
+        ToolCall(id="c2", name="write_file", args={"path": "debian/foo", "content": "x"}),
+    ])
+    assert outcome.declared_resolved is False
+    decl = next(r for r in outcome.results if r.call_id == "c1")
+    assert "changed since the last successful run_build" in decl.payload["error"]
