@@ -95,6 +95,11 @@ jobs:
       RUN_TOKEN_BUDGET: ${{ github.event.inputs.run_token_budget || '64000000' }}
       # Build matrix — sourced from the strategy matrix above.
       MATRIX_NAME: ${{ matrix.name }}
+      # Per-run-unique container name so concurrent jobs (two matrix entries, or
+      # queued runs from different PRs) on one LXD host never share a container.
+      # Including run_id means each run re-preps from scratch (no reuse); the
+      # cleanup step below deletes it so unique names don't accumulate.
+      CONTAINER: ceph-build-${{ matrix.name }}-${{ github.run_id }}
       CEPH_VERSION: ${{ matrix.ceph_version }}
       UBUNTU_BRANCH: ${{ matrix.ubuntu_branch }}
       DEBIAN_REF: ${{ matrix.debian_ref }}
@@ -138,7 +143,7 @@ jobs:
           echo "=== ccache stats for $MATRIX_NAME ==="
           if [ -d "$CCACHE_HOST_DIR" ]; then
             du -sh "$CCACHE_HOST_DIR"
-            lxc exec "ceph-build-$MATRIX_NAME" -- bash -c \
+            lxc exec "$CONTAINER" -- bash -c \
               "CCACHE_DIR=/root/ccache ccache --print-stats 2>/dev/null" || true
           else
             echo "(cache dir not present)"
@@ -174,3 +179,11 @@ jobs:
           name: resolver-diff-${{ matrix.name }}
           path: "${{ github.workspace }}/resolver-diff.patch"
           if-no-files-found: ignore
+
+      - name: Delete run container
+        if: always()
+        # Container names are per-run-unique, so they would accumulate on the
+        # host without this. The validation container (-validate suffix) is
+        # deleted by validation.py itself.
+        run: |
+          sg lxd -c "lxc delete --force '$CONTAINER'" || true
