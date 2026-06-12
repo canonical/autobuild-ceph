@@ -161,6 +161,23 @@ def emit_failure(payload: CIFailurePayload) -> None:
 # ---------------------------------------------------------------------------
 
 
+def write_diff_artifact(diff: str) -> bool:
+    """Write the captured diff to CI_DIFF_FILE if that env var is set.
+
+    Called early (right after the diff is captured, before validation) so the
+    diff artifact survives even if a later step crashes — otherwise an infra
+    fault during validation would discard the entire result of a multi-hour
+    run. Idempotent: the success path may write the same file again. Returns
+    True if a file was written.
+    """
+    diff_file = os.environ.get("CI_DIFF_FILE", "").strip()
+    if not diff_file:
+        return False
+    with open(diff_file, "w", encoding="utf-8") as fh:
+        fh.write(diff)
+    return True
+
+
 def _banner(title: str) -> None:
     bar = "=" * 72
     print(bar)
@@ -313,6 +330,14 @@ _RECOMMENDATIONS: dict[str, str] = {
 
         This is a resolver bug or an environment fault, not a packaging
         failure.  Check the traceback above and the job log."""),
+
+    "validation_error": textwrap.dedent("""\
+        A fix was produced but clean-rebuild validation could not run because
+        of an LXD infrastructure fault (snapshot copy / container exec), not a
+        problem with the fix itself.
+
+        The candidate diff was preserved (see the diff artifact).  Re-run
+        validation once the LXD host is healthy; the fix may well be good."""),
 
     "declared_unresolvable": textwrap.dedent("""\
         The model determined the build failure is not solvable with the

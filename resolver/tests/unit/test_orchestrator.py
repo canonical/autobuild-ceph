@@ -199,3 +199,52 @@ def test_failure_error_tail_falls_back_to_history_then_initial():
     assert _failure_error_tail(ok_build, history, "initial") == "error: from history"
     assert _failure_error_tail(ok_build, [], "initial") == "initial"
     assert _failure_error_tail(None, [], "initial") == "initial"
+
+
+# ---------------------------------------------------------------------------
+# _validate_and_publish: infra-fault must not discard a resolved fix
+# ---------------------------------------------------------------------------
+
+def test_validation_lxd_fault_persists_diff_and_does_not_crash(monkeypatch, tmp_path, cfg):
+    """An LXDError during validation (snapshot copy/exec) must not propagate
+    as a generic crash: the captured diff is written to CI_DIFF_FILE before
+    validation runs, and the run returns a distinct validation_error outcome."""
+    from ceph_autobuild_resolver import orchestrator
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+    from ceph_autobuild_resolver.lxd import ExecResult, LXDError
+    from ceph_autobuild_resolver.transcript import Transcript
+
+    captured_diff = "diff --git a/debian/rules b/debian/rules\n+x\n"
+
+    class FaultyLXD:
+        def exec_shell(self, *a, **k):
+            return ExecResult(0, captured_diff, "")
+        def exec(self, *a, **k):
+            return ExecResult(0, "", "")
+        def delete(self, *a, **k):
+            pass
+        def copy_from_snapshot(self, *a, **k):
+            raise LXDError("transient: could not copy snapshot")
+
+    diff_file = tmp_path / "resolver-diff.patch"
+    monkeypatch.setenv("CI_DIFF_FILE", str(diff_file))
+
+    outcome = orchestrator._validate_and_publish(
+        lxd=FaultyLXD(),
+        runner=object(),
+        cfg=cfg,
+        container="ceph-build",
+        pristine_snapshot="pristine",
+        matrix_name="resolute",
+        transcript=Transcript(tmp_path / "t.jsonl"),
+        dry_run_output=True,
+        initial=BuildOutcome(ok=False, stage="build", returncode=1, log_path="", log_tail=""),
+        summary="fixed it",
+    )
+
+    assert outcome.exit_code == 1
+    # The fix survived the infra fault.
+    assert diff_file.read_text(encoding="utf-8") == captured_diff
+    # Recorded as validation_error, not a bare crash.
+    transcript_text = (tmp_path / "t.jsonl").read_text()
+    assert "validation_error" in transcript_text
