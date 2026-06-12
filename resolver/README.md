@@ -54,8 +54,9 @@ All configuration is via environment variables:
 | `LAUNCHPAD_OWNER` | `lmlogiudice` | Launchpad username for packaging repo |
 | `CEPH_VERSION` | `20.2.0` | Upstream Ceph release to build |
 | `CCACHE_HOST_DIR` | — | Host path for a ccache bind-mount (optional speedup) |
+| `CCACHE_MAXSIZE` | `20G` | ccache size cap (ccache size syntax, e.g. `20G`/`500M`); ignored when ccache is disabled |
 | `REASONING_EFFORT` | — | OpenRouter only: `low`, `medium`, or `high` thinking effort |
-| `REASONING_MAX_TOKENS` | — | OpenRouter only: explicit thinking token budget (overrides `REASONING_EFFORT`) |
+| `REASONING_MAX_TOKENS` | — | Per-call thinking token budget. OpenRouter: explicit budget (overrides `REASONING_EFFORT`). Gemini: sets the `thinking_budget` parameter |
 
 ## How the loop works
 
