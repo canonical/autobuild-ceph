@@ -166,3 +166,36 @@ def test_preflight_merge_keeps_first_pass_changes_and_latest_report():
     assert merged.report == "r2"
     assert merged.dropped == ["a.patch"]
     assert merged.refreshed == ["b.patch"]
+
+
+def test_failure_error_tail_prefers_authoritative_last_build():
+    """History compression can evict the last build's tool result; the
+    BuildOutcome held by the execution handlers must win over the history
+    scan and the pre-loop fallback (CI run 27377122980 reported the initial
+    dpkg-source error while the real blocker was a link failure)."""
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+    from ceph_autobuild_resolver.orchestrator import _failure_error_tail
+
+    last = BuildOutcome(
+        ok=False,
+        stage="build",
+        returncode=2,
+        log_path="/root/build-logs/build.log",
+        log_tail="error: undefined reference to get_rgw_options()",
+    )
+    # Compressed-away history: no run_build results survive.
+    tail = _failure_error_tail(last, [], "dpkg-source: error: initial failure")
+    assert "get_rgw_options" in tail
+
+
+def test_failure_error_tail_falls_back_to_history_then_initial():
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+    from ceph_autobuild_resolver.orchestrator import _failure_error_tail
+
+    ok_build = BuildOutcome(
+        ok=True, stage="build", returncode=0, log_path="x", log_tail="ok"
+    )
+    history = [_build_msg(False, "error: from history")]
+    assert _failure_error_tail(ok_build, history, "initial") == "error: from history"
+    assert _failure_error_tail(ok_build, [], "initial") == "initial"
+    assert _failure_error_tail(None, [], "initial") == "initial"
