@@ -10,7 +10,8 @@ from ceph_autobuild_resolver.build_runner import BuildRunner
 from ceph_autobuild_resolver import guards
 from ceph_autobuild_resolver.tools.filesystem import (
     FilesystemHandlers,
-    _diff_target_paths,
+    _numstat_paths,
+    _rename_copy_sources,
 )
 
 
@@ -108,36 +109,38 @@ def test_edit_file_missing_old_str(fake_lxd, fs):
     assert "not found" in out["error"]
 
 
-def test_diff_target_paths_extracts_b_targets():
+def test_numstat_paths_parses_nul_records():
+    # git apply --numstat -z output: <add>\t<del>\t<path>\0 per record.
+    out = "1\t1\tsrc/a.cc\x000\t0\tdebian/control\x00"
+    assert _numstat_paths(out) == ["src/a.cc", "debian/control"]
+
+
+def test_numstat_paths_handles_split_rename_form():
+    # Some git versions emit a rename as counts then standalone from/to tokens.
+    out = "0\t0\t\x00src/old.cc\x00src/new.cc\x00"
+    assert _numstat_paths(out) == ["src/old.cc", "src/new.cc"]
+
+
+def test_rename_copy_sources_extracts_headers():
     diff = (
-        "diff --git a/debian/patches/x.patch b/debian/patches/x.patch\n"
-        "--- a/debian/patches/x.patch\n"
-        "+++ b/debian/patches/x.patch\n"
-        "@@ ...\n"
-    )
-    assert _diff_target_paths(diff) == ["debian/patches/x.patch"]
-
-
-def test_diff_target_paths_collects_preimage_for_deletions():
-    diff = (
-        "diff --git a/src/secret.cc b/src/secret.cc\n"
-        "deleted file mode 100644\n"
-        "--- a/src/secret.cc\n"
-        "+++ /dev/null\n"
-        "@@ -1 +0,0 @@\n"
-        "-x\n"
-    )
-    assert _diff_target_paths(diff) == ["src/secret.cc"]
-
-
-def test_diff_target_paths_collects_rename_headers():
-    diff = (
-        "diff --git a/src/old.cc b/src/new.cc\n"
-        "similarity index 100%\n"
+        "diff --git a/src/old.cc b/debian/new.cc\n"
         "rename from src/old.cc\n"
-        "rename to src/new.cc\n"
+        "rename to debian/new.cc\n"
+        "copy from src/other.cc\n"
+        "copy to debian/copied.cc\n"
     )
-    assert _diff_target_paths(diff) == ["src/old.cc", "src/new.cc"]
+    assert _rename_copy_sources(diff) == ["src/old.cc", "src/other.cc"]
+
+
+def test_apply_patch_rejects_upstream_targets(fs):
+    diff = (
+        "--- a/src/foo.cc\n"
+        "+++ b/src/foo.cc\n"
+        "@@ -1 +1 @@\n"
+        "-x\n+y\n"
+    )
+    with pytest.raises(Exception):
+        fs.apply_patch(diff)
 
 
 def test_apply_patch_rejects_out_of_scope_deletion(fs):
@@ -151,15 +154,61 @@ def test_apply_patch_rejects_out_of_scope_deletion(fs):
         fs.apply_patch(diff)
 
 
-def test_apply_patch_rejects_upstream_targets(fs):
+# Attack vectors that the old text-parsing scope gate (_diff_target_paths)
+# let through: each yields no a/ b/ target line yet git apply still writes
+# outside debian/. The numstat-based gate must reject all of them.
+
+def test_apply_patch_rejects_non_ab_prefix(fs):
+    # `x/`-prefixed headers: git apply -p1 strips `x/` and writes src/foo.cc.
     diff = (
-        "--- a/src/foo.cc\n"
-        "+++ b/src/foo.cc\n"
+        "diff --git x/src/foo.cc x/src/foo.cc\n"
+        "--- x/src/foo.cc\n"
+        "+++ x/src/foo.cc\n"
         "@@ -1 +1 @@\n"
         "-x\n+y\n"
     )
-    with pytest.raises(Exception):
+    with pytest.raises(guards.EditScopeViolation):
         fs.apply_patch(diff)
+
+
+def test_apply_patch_rejects_header_only_new_file(fs):
+    # Empty new file outside debian/, expressed only in the git header.
+    diff = (
+        "diff --git a/src/evil.cc b/src/evil.cc\n"
+        "new file mode 100644\n"
+        "index 0000000..e69de29\n"
+    )
+    with pytest.raises(guards.EditScopeViolation):
+        fs.apply_patch(diff)
+
+
+def test_apply_patch_rejects_mode_only_change(fs):
+    diff = (
+        "diff --git a/src/foo.cc b/src/foo.cc\n"
+        "old mode 100644\n"
+        "new mode 100755\n"
+    )
+    with pytest.raises(guards.EditScopeViolation):
+        fs.apply_patch(diff)
+
+
+def test_apply_patch_rejects_rename_source_outside_debian(fs):
+    # numstat reports only the (in-scope) destination; the out-of-scope
+    # source must still be caught via the rename-from header.
+    diff = (
+        "diff --git a/src/real.cc b/debian/sneak.cc\n"
+        "similarity index 100%\n"
+        "rename from src/real.cc\n"
+        "rename to debian/sneak.cc\n"
+    )
+    with pytest.raises(guards.EditScopeViolation):
+        fs.apply_patch(diff)
+
+
+def test_apply_patch_rejects_unparseable_diff(fs):
+    out = fs.apply_patch("this is not a diff at all\n")
+    assert out["ok"] is False
+    assert "could not parse" in out["stderr"]
 
 
 # ----------------------------------------------------------------------

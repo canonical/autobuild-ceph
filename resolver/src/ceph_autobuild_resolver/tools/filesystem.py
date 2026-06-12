@@ -253,12 +253,30 @@ class FilesystemHandlers:
         return {"ok": True, "flags": _flags_to_dict(flags)}
 
     def apply_patch(self, diff: str) -> dict[str, Any]:
-        # Scope-check every path mentioned in the diff before applying.
+        # Scope-check every path git apply will actually touch before applying.
+        # The authoritative path list comes from `git apply --numstat` (git's
+        # own resolver, post -p1), not from parsing the diff text: a text
+        # parser is easy to slip past (an `x/`-prefixed, header-only, or
+        # mode-only diff yields no targets yet git apply still writes the
+        # file). numstat reports create/modify/delete/rename-to targets;
+        # rename/copy *sources* (which numstat omits) come from the literal
+        # `rename from`/`copy from` headers, which are repo-relative.
+        numstat = self.runner.patch_numstat(self.container, diff)
+        if not numstat.ok:
+            return {
+                "ok": False,
+                "stderr": (
+                    "git apply could not parse this diff (--numstat failed); "
+                    "the patch is malformed and was not applied. "
+                    + (numstat.stderr.strip() or "")
+                ).strip(),
+            }
+        targets = set(_numstat_paths(numstat.stdout)) | set(_rename_copy_sources(diff))
         # The patch-file block (assert_not_patch_file) must also be enforced
         # here: apply_patch can otherwise bypass the hard block that write_file
         # and edit_file enforce, allowing the model to directly write malformed
         # @@ headers into debian/patches/*.patch files.
-        for path in _diff_target_paths(diff):
+        for path in sorted(targets):
             guards.assert_in_scope(path)
             guards.assert_not_patch_file(path)
         # apply_patch_to_tree does NOT reset the working tree, so all prior
@@ -516,25 +534,40 @@ def _flags_to_dict(flags: guards.WriteFlags) -> dict[str, bool]:
     }
 
 
-def _diff_target_paths(diff: str) -> list[str]:
-    """Extract every path a unified diff touches.
+def _numstat_paths(stdout: str) -> list[str]:
+    """Parse ``git apply --numstat -z`` output into the paths it touches.
 
-    Post-image (``+++ b/``) lines alone are not enough: a deletion hunk has
-    ``+++ /dev/null`` and a rename carries its paths in ``rename from``/
-    ``rename to`` headers, so pre-image (``--- a/``) and rename lines must be
-    collected too or deletions/renames would bypass the scope check entirely.
+    Records are NUL-delimited. A normal record is ``<added>\\t<deleted>\\t<path>``;
+    some git versions emit a rename as ``<added>\\t<deleted>\\t`` followed by the
+    old and new paths as separate NUL-terminated tokens. Counts are always tab-
+    joined with their path, so a standalone (tab-less) token is a rename/copy
+    path, never a numeric count.
     """
-    targets: list[str] = []
+    paths: list[str] = []
+    for tok in stdout.split("\0"):
+        if not tok:
+            continue
+        if "\t" in tok:
+            tail = tok.split("\t")[-1]
+            if tail:
+                paths.append(tail)
+        else:
+            paths.append(tok)
+    return paths
+
+
+def _rename_copy_sources(diff: str) -> list[str]:
+    """Repo-relative source paths from ``rename from``/``copy from`` headers.
+
+    numstat reports only the rename/copy *destination*; the source (which the
+    operation deletes/reads) must be scope-checked too. These header lines are
+    literal repo-relative paths, independent of the diff's ``a/``/``b/`` prefix.
+    """
+    sources: list[str] = []
     for line in diff.splitlines():
-        target = ""
-        if line.startswith("+++ ") and " b/" in line:
-            target = line.split(" b/", 1)[1].split("\t", 1)[0].strip()
-        elif line.startswith("--- ") and " a/" in line:
-            target = line.split(" a/", 1)[1].split("\t", 1)[0].strip()
-        elif line.startswith("rename from "):
-            target = line[len("rename from "):].strip()
-        elif line.startswith("rename to "):
-            target = line[len("rename to "):].strip()
-        if target and target != "/dev/null" and target not in targets:
-            targets.append(target)
-    return targets
+        for prefix in ("rename from ", "copy from "):
+            if line.startswith(prefix):
+                p = line[len(prefix):].strip()
+                if p:
+                    sources.append(p)
+    return sources

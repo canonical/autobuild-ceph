@@ -19,7 +19,7 @@ from .build_steps import (
     install_dependencies_stage,
     prepare_tarball_stage,
 )
-from .config import BUILD_STEP_TIMEOUT_SECONDS, Config
+from .config import BUILD_STEP_TIMEOUT_SECONDS, TOOL_EXEC_TIMEOUT_SECONDS, Config
 from .lxd import ExecResult, LXDManager
 
 log = logging.getLogger(__name__)
@@ -211,6 +211,30 @@ class BuildRunner:
     # ------------------------------------------------------------------
     # Resolver-specific helpers
     # ------------------------------------------------------------------
+
+    def patch_numstat(self, container: str, diff_text: str) -> ExecResult:
+        """Dry-run ``git apply --numstat`` on a diff to learn the paths it touches.
+
+        ``--numstat`` is parse-only (it never modifies the tree) and reports
+        the post-``-p1`` target path for every file the diff would create,
+        modify, delete, or rename-to. It is git's own path resolver, so the
+        scope check and the real apply agree on what is touched -- unlike a
+        hand-rolled header parser, which the prior ``_diff_target_paths``
+        proved easy to slip past (``x/``-prefixed, header-only, or mode-only
+        diffs yielded no targets while ``git apply`` still wrote the file).
+
+        ``-z`` NUL-delimits records so paths with odd characters can't be
+        misparsed. A non-zero exit means git could not parse the diff at all;
+        the caller must refuse to apply it.
+        """
+        self._lxd.put_text(container, _DIFF_PATH, diff_text)
+        return self._lxd.exec(
+            container,
+            ["git", "apply", "--numstat", "-z", _DIFF_PATH],
+            cwd=self._cfg.container_workdir,
+            check=False,
+            timeout=TOOL_EXEC_TIMEOUT_SECONDS,
+        )
 
     def apply_patch_to_tree(self, container: str, diff_text: str) -> ExecResult:
         """Apply a unified diff to the current working tree without resetting first.
