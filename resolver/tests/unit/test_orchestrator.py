@@ -58,6 +58,42 @@ def _run_stage_script(repo: Path) -> str:
     )
 
 
+def test_captured_diff_reapplies_on_clean_tree(repo: Path):
+    """The outcome-integrity contract: the captured diff must re-apply via
+    `git apply --index` on a clean tree -- exactly what validation.apply_diff
+    does on a pristine container. A regression in the staging script (e.g. a
+    leaked build artifact) would make validation fail a genuinely good fix."""
+    # Model edits across the debian/ surface, plus a debhelper artifact that
+    # must NOT enter the diff.
+    (repo / "debian/control").write_text(_CONTROL.replace("librados2", "librados3"))
+    (repo / "debian/ceph-common.install").write_text("usr/bin/ceph\nusr/bin/rbd\n")
+    (repo / "debian/patches/new.patch").write_text("--- a/y\n+++ b/y\n")
+    (repo / "debian/patches/series").write_text("old.patch\nnew.patch\n")
+    (repo / "debian/ceph-common").mkdir()
+    (repo / "debian/ceph-common/usr").mkdir()
+    (repo / "debian/ceph-common/usr/file").write_text("BUILT ARTIFACT")
+
+    diff = _run_stage_script(repo)
+
+    # Reset to a clean HEAD tree (what the pristine validation container is).
+    _git(repo, "reset", "-q", "--hard")
+    _git(repo, "clean", "-fdq")
+
+    # Apply exactly as validation does.
+    (repo / "patch.diff").write_text(diff)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "apply", "--index", "--whitespace=nowarn", "patch.diff"],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, f"captured diff did not re-apply: {proc.stderr}"
+
+    # The model's edits are present after re-apply; the artifact is not.
+    assert "librados3" in (repo / "debian/control").read_text()
+    assert "usr/bin/rbd" in (repo / "debian/ceph-common.install").read_text()
+    assert (repo / "debian/patches/new.patch").exists()
+    assert not (repo / "debian/ceph-common/usr/file").exists()
+
+
 def test_diff_captures_all_model_edits_under_debian(repo: Path):
     # Edits the prompt explicitly directs: control, an .install file, and a
     # dropped patch -- the old six-file allowlist captured only some of these.
