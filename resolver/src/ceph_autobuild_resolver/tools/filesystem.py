@@ -261,6 +261,16 @@ class FilesystemHandlers:
         # file). numstat reports create/modify/delete/rename-to targets;
         # rename/copy *sources* (which numstat omits) come from the literal
         # `rename from`/`copy from` headers, which are repo-relative.
+        # Refuse symlink creation/conversion: a `mode 120000` entry creates a
+        # symlink under debian/ that passes the logical-path scope check, and a
+        # later read/write through it dereferences outside the workspace (the
+        # guards deliberately don't resolve symlinks). Path scoping alone can't
+        # see this, so reject before applying.
+        if _diff_creates_symlink(diff):
+            raise guards.EditScopeViolation(
+                "patch creates or converts a file to a symlink (mode 120000); "
+                "refused — symlinks can escape the workspace when dereferenced."
+            )
         numstat = self.runner.patch_numstat(self.container, diff)
         if not numstat.ok:
             return {
@@ -334,7 +344,15 @@ class FilesystemHandlers:
         if old_content == new_content:
             return {"ok": False, "error": "old_content equals new_content — no change"}
 
-        rel_file = guards.normalize(file)
+        # Contain the read like the other read tools (read_files/grep/git_log):
+        # guards.normalize alone keeps '..', so an adversarial file like
+        # '../../etc/shadow' or '../ccache/...' would be read and its contents
+        # leaked into the generated patch under debian/patches/ (then readable
+        # via read_files). contained_relpath rejects traversal/out-of-workspace.
+        try:
+            rel_file = guards.contained_relpath(file, self.cfg.container_workdir)
+        except guards.EditScopeViolation as exc:
+            return {"ok": False, "error": str(exc)}
         full_file = f"{self.cfg.container_workdir}/{rel_file}"
         current = self._read_full_if_exists(full_file)
         if current is None:
@@ -554,6 +572,26 @@ def _numstat_paths(stdout: str) -> list[str]:
         else:
             paths.append(tok)
     return paths
+
+
+def _diff_creates_symlink(diff: str) -> bool:
+    """True if a unified diff creates a symlink or converts a file to one.
+
+    git encodes symlinks as mode 120000. We flag any ``mode 120000`` on a
+    create/change line; deleting a symlink (also 120000) is harmless but rare
+    enough that refusing the whole class via apply_patch is acceptable — the
+    model has delete_file/drop_patch for removals.
+    """
+    for line in diff.splitlines():
+        s = line.strip()
+        if s.endswith("120000") and (
+            s.startswith("new file mode")
+            or s.startswith("new mode")
+            or s.startswith("old mode")
+            or s.startswith("deleted file mode")
+        ):
+            return True
+    return False
 
 
 def _rename_copy_sources(diff: str) -> list[str]:

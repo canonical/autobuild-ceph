@@ -405,3 +405,66 @@ def test_read_full_refuses_oversized_files(fake_lxd, fs):
     _seed_file(fake_lxd, "debian/huge", "x" * (_MAX_FULL_READ_BYTES + 10))
     with pytest.raises(ValueError, match="exceeds"):
         fs.edit_file("debian/huge", "x", "y")
+
+
+def test_apply_patch_rejects_symlink_creation(fs):
+    # mode 120000 = symlink; creating one under debian/ then dereferencing it
+    # later escapes the workspace, so apply_patch must refuse it.
+    diff = (
+        "diff --git a/debian/evil-link b/debian/evil-link\n"
+        "new file mode 120000\n"
+        "index 0000000..1234567\n"
+        "--- /dev/null\n"
+        "+++ b/debian/evil-link\n"
+        "@@ -0,0 +1 @@\n"
+        "+/root/ccache\n"
+    )
+    with pytest.raises(guards.EditScopeViolation, match="symlink"):
+        fs.apply_patch(diff)
+
+
+def test_diff_creates_symlink_detects_mode_120000():
+    from ceph_autobuild_resolver.tools.filesystem import _diff_creates_symlink
+
+    assert _diff_creates_symlink("new file mode 120000\n") is True
+    assert _diff_creates_symlink("new mode 120000\n") is True
+    assert _diff_creates_symlink("new file mode 100644\n") is False
+    assert _diff_creates_symlink("--- a/debian/x\n+++ b/debian/x\n") is False
+
+
+def test_replace_in_upstream_rejects_traversal(fs):
+    out = fs.replace_in_upstream(
+        patch_name="x.patch",
+        file="../../etc/shadow",
+        old_content="a",
+        new_content="b",
+        description="d",
+    )
+    assert out["ok"] is False
+    assert ".." in out["error"]
+
+
+def test_apply_patch_accepts_valid_debian_diff(fake_lxd, fs, tmp_path):
+    # Success-path coverage: a well-formed debian/ diff must pass the numstat
+    # scope gate and apply. FakeLXD shells real git, so init a repo first.
+    import subprocess
+    repo = Path(fake_lxd.root) / "root/ceph"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "debian").mkdir()
+    (repo / "debian/rules").write_text("orig\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": "/usr/bin:/bin"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env)
+    diff = (
+        "diff --git a/debian/rules b/debian/rules\n"
+        "--- a/debian/rules\n"
+        "+++ b/debian/rules\n"
+        "@@ -1 +1 @@\n"
+        "-orig\n"
+        "+patched\n"
+    )
+    out = fs.apply_patch(diff)
+    assert out["ok"] is True, out
+    assert (repo / "debian/rules").read_text() == "patched\n"
