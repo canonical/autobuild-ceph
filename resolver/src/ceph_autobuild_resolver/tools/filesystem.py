@@ -176,6 +176,10 @@ class FilesystemHandlers:
     ) -> dict[str, Any]:
         from .schema import DEFAULT_LOG_BYTES
 
+        # Clamp a negative start to 0 before any arithmetic: a negative skip
+        # would both inflate `count` (min(end, total) - (-n)) and make
+        # `dd skip=-n` exit non-zero.
+        start = max(0, start)
         end = end if end is not None else start + DEFAULT_LOG_BYTES
         size_res = self.lxd.exec(
             self.container,
@@ -210,6 +214,10 @@ class FilesystemHandlers:
             check=False,
             timeout=TOOL_EXEC_TIMEOUT_SECONDS,
         )
+        if not result.ok:
+            # dd failed (e.g. read error): surface it instead of returning an
+            # empty content blob that reads like a legitimately empty slice.
+            return {"error": result.stderr.strip() or "read_log dd failed"}
         return {
             "content": result.stdout,
             "start": start,
@@ -300,13 +308,31 @@ class FilesystemHandlers:
         for path in sorted(targets):
             guards.assert_in_scope(path)
             guards.assert_not_patch_file(path)
+        # Capture pre-apply content of the flag-sensitive paths so we can
+        # surface the same reviewer-attention flags the other mutating tools
+        # do: a patch that strips a debian/patches/series entry or relaxes a
+        # debian/control version constraint must not slip through unflagged just
+        # because it came in as a diff. evaluate_flags' version-change and
+        # series-removal heuristics need BOTH old and new content, so the
+        # pre-image must be read before the apply, not reconstructed after.
+        sensitive = [p for p in sorted(targets) if _is_flag_sensitive(p)]
+        old_contents = {p: self._read_full_if_exists(self._full(p)) for p in sensitive}
         # apply_patch_to_tree does NOT reset the working tree, so all prior
         # model edits (patches written, rules changed) are preserved.
         result = self.runner.apply_patch_to_tree(self.container, diff)
-        return {
-            "ok": result.ok,
-            "stderr": result.stderr if not result.ok else "",
-        }
+        if not result.ok:
+            return {"ok": False, "stderr": result.stderr}
+        flags = guards.WriteFlags()
+        for p in sensitive:
+            new = self._read_full_if_exists(self._full(p))
+            f = guards.evaluate_flags(
+                guards.normalize(p),
+                is_delete=new is None,
+                new_content=new,
+                old_content=old_contents[p],
+            )
+            flags = _merge_flags(flags, f)
+        return {"ok": True, "stderr": "", "flags": _flags_to_dict(flags)}
 
     def delete_file(self, path: str) -> dict[str, Any]:
         guards.assert_in_scope(path)
@@ -314,6 +340,10 @@ class FilesystemHandlers:
         rel = guards.normalize(path)
         full = f"{self.cfg.container_workdir}/{rel}"
         old = self._read_full_if_exists(full)
+        # `rm -f` succeeds whether or not the target existed; report the
+        # distinction so the dispatcher's no-progress guard isn't reset by a
+        # delete of a file that was never there.
+        existed = old is not None
         flags = guards.evaluate_flags(
             rel, is_delete=True, new_content=None, old_content=old
         )
@@ -325,6 +355,7 @@ class FilesystemHandlers:
         )
         return {
             "ok": result.ok,
+            "deleted_file": existed,
             "flags": _flags_to_dict(flags),
             "stderr": result.stderr if not result.ok else "",
         }
@@ -431,7 +462,17 @@ class FilesystemHandlers:
             # hunk is computed against the unmodified on-disk file, so two
             # independent hunks for the same file would have overlapping/
             # contradictory context and dpkg-source would reject the patch.
-            already_patched = f"a/{rel_file}" in old_patch
+            # Anchor on the exact ``--- a/<file>`` diff header, not a bare
+            # substring: a DEP-3 Description mentioning "a/<file>" in prose would
+            # otherwise falsely trip this. Match the whole line (difflib emits no
+            # trailing date here) -- or a tab-separated date, defensively -- so a
+            # path that is a prefix of another (src/foo vs src/foobar) can't
+            # collide either.
+            header = f"--- a/{rel_file}"
+            already_patched = any(
+                line == header or line.startswith(header + "\t")
+                for line in old_patch.splitlines()
+            )
             if already_patched:
                 return {
                     "ok": False,
@@ -488,6 +529,11 @@ class FilesystemHandlers:
         """Atomically remove ``patch_name`` from series and delete the file."""
         if not patch_name or "/" in patch_name:
             return {"ok": False, "error": "invalid patch_name"}
+        # Require the .patch suffix (as replace_in_upstream does): without it
+        # drop_patch('series') resolves to debian/patches/series and would delete
+        # the series file itself, silently disabling every quilt patch.
+        if not patch_name.endswith(".patch"):
+            return {"ok": False, "error": "patch_name must end with .patch"}
 
         rel_patch = f"debian/patches/{patch_name}"
         guards.assert_in_scope(rel_patch)
@@ -532,6 +578,10 @@ class FilesystemHandlers:
     # Internal
     # ------------------------------------------------------------------
 
+    def _full(self, rel_or_abs: str) -> str:
+        """Container path for a repo-relative (or workdir-absolute) target."""
+        return f"{self.cfg.container_workdir}/{guards.normalize(rel_or_abs)}"
+
     def _read_full_if_exists(self, full_path: str) -> str | None:
         # Cap the read at the source: a huge file (e.g. a build artifact)
         # must not land fully in host memory just for the dispatcher to
@@ -553,6 +603,30 @@ class FilesystemHandlers:
                 "artifacts, not editable packaging files."
             )
         return result.stdout
+
+
+def _is_flag_sensitive(path: str) -> bool:
+    """True for the paths guards.evaluate_flags actually inspects.
+
+    Limits the pre/post-apply reads in apply_patch to debian/control,
+    debian/patches/series and other debian/patches/ entries -- the only paths
+    that can raise a WriteFlag -- so we never read a large unrelated debian/
+    file just to evaluate flags that would always come back empty.
+    """
+    p = guards.normalize(path)
+    return p in ("debian/control", "debian/patches/series") or p.startswith(
+        "debian/patches/"
+    )
+
+
+def _merge_flags(a: guards.WriteFlags, b: guards.WriteFlags) -> guards.WriteFlags:
+    return guards.WriteFlags(
+        debian_control_version_change=a.debian_control_version_change
+        or b.debian_control_version_change,
+        debian_patches_series_removal=a.debian_patches_series_removal
+        or b.debian_patches_series_removal,
+        system_flag_disabled=a.system_flag_disabled or b.system_flag_disabled,
+    )
 
 
 def _flags_to_dict(flags: guards.WriteFlags) -> dict[str, bool]:

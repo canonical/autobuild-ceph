@@ -115,6 +115,24 @@ _FILE_MUTATORS = {
 }
 
 
+def _was_actual_mutation(name: str, payload: dict[str, Any]) -> bool:
+    """Whether an ok=True mutator call actually changed the tree.
+
+    drop_patch and delete_file return ok=True even when the target was already
+    gone; for those, require the payload to confirm a real deletion/removal.
+    The other mutators only report ok=True after a genuine write.
+    """
+    if not (isinstance(payload, dict) and payload.get("ok")):
+        return False
+    if name == "drop_patch":
+        return bool(
+            payload.get("deleted_file") or payload.get("removed_from_series")
+        )
+    if name == "delete_file":
+        return bool(payload.get("deleted_file"))
+    return True
+
+
 class Dispatcher:
     def __init__(
         self,
@@ -189,6 +207,25 @@ class Dispatcher:
                 continue
 
             if call.name == "declare_unresolvable":
+                if self._execution.last_build is None:
+                    # Mirror declare_resolved's "build behind it" requirement:
+                    # never let a (possibly prompt-injected) call terminate the
+                    # session before a single build was ever attempted.
+                    results.append(
+                        ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            payload={
+                                "error": (
+                                    "declare_unresolvable rejected: no run_build "
+                                    "has been attempted yet. Investigate and run "
+                                    "the build at least once before declaring the "
+                                    "failure unresolvable."
+                                )
+                            },
+                        )
+                    )
+                    continue
                 reason = str(call.args.get("reason", ""))
                 unresolvable = True
                 unresolvable_reason = reason
@@ -199,20 +236,32 @@ class Dispatcher:
                         payload={"acknowledged": True},
                     )
                 )
-                continue
+                # Terminal call: stop processing the batch so the returned
+                # DispatchOutcome can't also flag declared_resolved from a later
+                # call in the same batch.
+                break
 
             if call.name == "declare_resolved":
                 last = self._execution.last_build
-                if last is not None and not last.ok:
+                if last is None or not last.ok:
+                    # No build at all is as untrusted as a failed one: declaring
+                    # resolved without a successful run_build behind it would
+                    # publish a summary backed by zero build evidence.
+                    detail = (
+                        "no run_build has succeeded yet"
+                        if last is None
+                        else (
+                            f"the last run_build failed (stage={last.stage!r}, "
+                            f"rc={last.returncode})"
+                        )
+                    )
                     results.append(
                         ToolResult(
                             call_id=call.id,
                             name=call.name,
                             payload={
                                 "error": (
-                                    "declare_resolved rejected: the last run_build "
-                                    f"failed (stage={last.stage!r}, "
-                                    f"rc={last.returncode}). "
+                                    f"declare_resolved rejected: {detail}. "
                                     "The build must succeed before you can declare "
                                     "it resolved."
                                 )
@@ -256,7 +305,9 @@ class Dispatcher:
                         payload={"acknowledged": True},
                     )
                 )
-                continue
+                # Terminal call accepted: stop processing the batch (the loop
+                # returns to validation; later calls would never be observed).
+                break
 
             handler = self._handlers.get(call.name)
             if handler is None:
@@ -283,9 +334,14 @@ class Dispatcher:
                 log.exception("handler %s failed", call.name)
                 payload = {"error": "handler_failure", "message": str(exc)}
 
-            # If this call mutated the working tree, mark it so the next
-            # run_build won't be refused by the hard guard.
-            if call.name in _FILE_MUTATORS and payload.get("ok"):
+            # If this call actually mutated the working tree, mark it so the
+            # next run_build won't be refused by the hard guard. A no-op
+            # drop_patch/delete_file (target already gone) returns ok=True but
+            # changed nothing -- counting it would let a stuck model keep
+            # resetting the no-progress guard and mask an infinite loop.
+            if call.name in _FILE_MUTATORS and _was_actual_mutation(
+                call.name, payload
+            ):
                 self._execution.files_changed_since_last_build = True
 
             results.append(

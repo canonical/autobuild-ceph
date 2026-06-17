@@ -121,6 +121,40 @@ def test_run_build_proceeds_after_mutation(dispatcher, fake_lxd):
     assert "skipped" not in run_payload or run_payload.get("skipped") is not True
 
 
+def test_noop_drop_patch_does_not_reset_no_progress_guard(dispatcher, fake_lxd):
+    """drop_patch on a target that's already gone returns ok=True but changed
+    nothing; it must NOT clear the no-progress debt (else a stuck model loops)."""
+    dispatcher._execution.files_changed_since_last_build = False
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="drop_patch", args={"patch_name": "ghost.patch"})]
+    )
+    p = outcome.results[0].payload
+    assert p["ok"] is True
+    assert p["deleted_file"] is False and p["removed_from_series"] is False
+    assert dispatcher.files_changed is False
+
+
+def test_real_drop_patch_resets_no_progress_guard(dispatcher, fake_lxd):
+    fake_lxd.put_text("ceph-build", "/root/ceph/debian/patches/series", "x.patch\n")
+    fake_lxd.put_text("ceph-build", "/root/ceph/debian/patches/x.patch", "body\n")
+    dispatcher._execution.files_changed_since_last_build = False
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="drop_patch", args={"patch_name": "x.patch"})]
+    )
+    assert outcome.results[0].payload["removed_from_series"] is True
+    assert dispatcher.files_changed is True
+
+
+def test_noop_delete_file_does_not_reset_no_progress_guard(dispatcher, fake_lxd):
+    dispatcher._execution.files_changed_since_last_build = False
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="delete_file", args={"path": "debian/ghost"})]
+    )
+    p = outcome.results[0].payload
+    assert p["ok"] is True and p["deleted_file"] is False
+    assert dispatcher.files_changed is False
+
+
 def test_grep_log_routed_with_injected_log_path(dispatcher, fake_lxd):
     """The dispatcher must inject the build log path so the model never
     has to know it (mirrors how read_log is wired)."""
@@ -193,7 +227,18 @@ def test_oversized_mutator_result_preserves_files_changed(dispatcher):
     assert p["path"] == "debian/foo"
 
 
+def _seed_clean_build(dispatcher):
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True, stage="build", returncode=0,
+        log_path="/root/build-logs/build.log", log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = False
+
+
 def test_declare_resolved_signals_termination(dispatcher):
+    _seed_clean_build(dispatcher)
     outcome = dispatcher.dispatch(
         [
             ToolCall(
@@ -205,6 +250,56 @@ def test_declare_resolved_signals_termination(dispatcher):
     )
     assert outcome.declared_resolved is True
     assert outcome.resolution_summary == "fixed it"
+
+
+def test_declare_resolved_rejected_when_no_build_ever_ran(dispatcher):
+    """last_build is None (no run_build yet): declaring resolved must be
+    rejected, not accepted on zero build evidence."""
+    assert dispatcher._execution.last_build is None
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="declare_resolved", args={"summary": "done"})]
+    )
+    assert outcome.declared_resolved is False
+    assert "no run_build has succeeded" in outcome.results[0].payload["error"]
+
+
+def test_declare_unresolvable_rejected_when_no_build_ever_ran(dispatcher):
+    """Mirror of declare_resolved: a (possibly injected) unresolvable call must
+    not terminate the session before any build was attempted."""
+    assert dispatcher._execution.last_build is None
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="declare_unresolvable", args={"reason": "nope"})]
+    )
+    assert outcome.declared_unresolvable is False
+    assert "no run_build has been attempted" in outcome.results[0].payload["error"]
+
+
+def test_declare_unresolvable_accepted_after_a_build(dispatcher):
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=False, stage="build", returncode=2,
+        log_path="/root/build-logs/build.log", log_tail="boom",
+    )
+    outcome = dispatcher.dispatch(
+        [ToolCall(id="c1", name="declare_unresolvable", args={"reason": "stuck"})]
+    )
+    assert outcome.declared_unresolvable is True
+    assert outcome.unresolvable_reason == "stuck"
+
+
+def test_declare_unresolvable_breaks_batch_before_declare_resolved(dispatcher):
+    """A terminal call stops the batch: [declare_unresolvable, declare_resolved]
+    must not set both flags on the outcome (internally contradictory)."""
+    _seed_clean_build(dispatcher)
+    outcome = dispatcher.dispatch([
+        ToolCall(id="c1", name="declare_unresolvable", args={"reason": "give up"}),
+        ToolCall(id="c2", name="declare_resolved", args={"summary": "no"}),
+    ])
+    assert outcome.declared_unresolvable is True
+    assert outcome.declared_resolved is False
+    # The later declare_resolved was never processed (no result for it).
+    assert [r.call_id for r in outcome.results] == ["c1"]
 
 
 def test_declare_resolved_rejected_with_unbuilt_changes(dispatcher):
