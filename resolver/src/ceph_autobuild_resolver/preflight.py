@@ -118,11 +118,21 @@ def format_summary(result: PreflightResult) -> str:
 def _run_patch_preflight(
     lxd: LXDManager, container: str, cfg: Config, series: str
 ) -> PreflightResult:
-    patches = [
-        line.strip()
-        for line in series.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    patches = []
+    for line in series.splitlines():
+        entry = line.strip()
+        if not entry or line.lstrip().startswith("#"):
+            continue
+        # A series entry must stay inside debian/patches/. An absolute path or a
+        # '..' component would let the phase-1 `patch --dry-run` redirect and the
+        # `_drop_patch` `rm -f` reach files elsewhere under the workdir; shlex
+        # quoting stops shell word-splitting but does nothing against traversal.
+        if entry.startswith("/") or ".." in entry.split("/"):
+            log.warning(
+                "preflight: skipping unsafe series entry %r (path traversal)", entry
+            )
+            continue
+        patches.append(entry)
     if not patches:
         return PreflightResult(report="", dropped=[], refreshed=[])
 
