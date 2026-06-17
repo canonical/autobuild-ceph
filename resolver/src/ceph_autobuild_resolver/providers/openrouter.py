@@ -249,10 +249,11 @@ def _from_sdk_response(response: Any) -> tuple[Message, Usage]:
     if getattr(choice, "finish_reason", None) == "length":
         # A length-truncated reply is otherwise indistinguishable from a
         # complete one; mark it so the loop/transcript see why the turn
-        # was cut short.
+        # was cut short. Annotate even when tool calls are present: a truncated
+        # batch may carry a malformed/incomplete final tool call, and the loop
+        # otherwise sees a normal tool-call turn with no truncation signal.
         log.warning("openrouter reply truncated: finish_reason=length")
-        if not tool_calls:
-            text = f"{text or ''}\n[TRUNCATED: finish_reason=length — reply hit the output-token limit]".strip()
+        text = f"{text or ''}\n[TRUNCATED: finish_reason=length — reply hit the output-token limit]".strip()
 
     return Message(
         role=ROLE_MODEL,
