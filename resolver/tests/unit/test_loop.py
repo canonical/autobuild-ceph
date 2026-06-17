@@ -58,6 +58,18 @@ def _build_dispatcher(fake_lxd, cfg) -> Dispatcher:
     return Dispatcher(fs, sr, ex, build_log_path="/root/build-logs/build.log")
 
 
+def _seed_clean_build(dispatcher: Dispatcher) -> None:
+    """Mark the last build as a clean success so declare_resolved is accepted
+    (the dispatch guard now rejects it when no build has succeeded)."""
+    from ceph_autobuild_resolver.build_runner import BuildOutcome
+
+    dispatcher._execution.last_build = BuildOutcome(
+        ok=True, stage="build", returncode=0,
+        log_path="/root/build-logs/build.log", log_tail="ok",
+    )
+    dispatcher._execution.files_changed_since_last_build = False
+
+
 def test_loop_terminates_on_declare_resolved(fake_lxd, cfg, tmp_path):
     provider = ScriptedProvider(
         [
@@ -74,6 +86,7 @@ def test_loop_terminates_on_declare_resolved(fake_lxd, cfg, tmp_path):
         ]
     )
     dispatcher = _build_dispatcher(fake_lxd, cfg)
+    _seed_clean_build(dispatcher)
     transcript = Transcript(tmp_path / "t.jsonl")
     budget = Budget.from_config(cfg)
 
@@ -102,6 +115,7 @@ def test_loop_nudges_on_textonly_reply(fake_lxd, cfg, tmp_path):
         ]
     )
     dispatcher = _build_dispatcher(fake_lxd, cfg)
+    _seed_clean_build(dispatcher)
     budget = Budget.from_config(cfg)
     transcript = Transcript(tmp_path / "t.jsonl")
 

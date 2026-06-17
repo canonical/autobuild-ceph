@@ -381,6 +381,159 @@ def test_drop_patch_when_only_series_has_entry(fake_lxd, fs):
     assert "ghost" not in series
 
 
+def test_drop_patch_rejects_series_file_itself(fake_lxd, fs):
+    """drop_patch('series') must be refused by the .patch-suffix guard, or it
+    would delete debian/patches/series and disable every quilt patch."""
+    _seed_file(fake_lxd, "debian/patches/series", "a.patch\nb.patch\n")
+    out = fs.drop_patch("series")
+    assert out["ok"] is False
+    assert "must end with .patch" in out["error"]
+    # The series file is untouched.
+    assert (
+        Path(fake_lxd.root) / "root/ceph/debian/patches/series"
+    ).read_text() == "a.patch\nb.patch\n"
+
+
+def test_replace_in_upstream_description_mentioning_path_does_not_block(fake_lxd, fs):
+    """The same-file guard must anchor on the '--- a/<file>' diff header, not a
+    bare substring: a DEP-3 description that mentions 'a/src/bar.cc' must not
+    make a genuine first hunk for src/bar.cc look already-patched."""
+    _seed_file(fake_lxd, "src/foo.cc", "line a\nline b\nline c\n")
+    _seed_file(fake_lxd, "src/bar.cc", "line x\nline y\nline z\n")
+    _seed_file(fake_lxd, "debian/patches/series", "")
+
+    first = fs.replace_in_upstream(
+        patch_name="multi.patch",
+        file="src/foo.cc",
+        old_content="line b\n",
+        new_content="line B\n",
+        description="also fix a/src/bar.cc handling",
+    )
+    assert first["ok"] is True
+    second = fs.replace_in_upstream(
+        patch_name="multi.patch",
+        file="src/bar.cc",
+        old_content="line y\n",
+        new_content="line Y\n",
+        description="also fix a/src/bar.cc handling",
+    )
+    assert second["ok"] is True, second
+    patch = (
+        Path(fake_lxd.root) / "root/ceph/debian/patches/multi.patch"
+    ).read_text()
+    assert "--- a/src/bar.cc" in patch
+
+
+def test_replace_in_upstream_prefix_path_not_treated_as_same_file(fake_lxd, fs):
+    """A first hunk for src/foobar.cc must not be rejected just because the patch
+    already has a hunk for src/foo.cc (a path prefix)."""
+    _seed_file(fake_lxd, "src/foo.cc", "alpha\nbeta\ngamma\n")
+    _seed_file(fake_lxd, "src/foobar.cc", "one\ntwo\nthree\n")
+    _seed_file(fake_lxd, "debian/patches/series", "")
+
+    assert fs.replace_in_upstream(
+        patch_name="p.patch", file="src/foo.cc",
+        old_content="beta\n", new_content="BETA\n", description="d",
+    )["ok"] is True
+    second = fs.replace_in_upstream(
+        patch_name="p.patch", file="src/foobar.cc",
+        old_content="two\n", new_content="TWO\n", description="d",
+    )
+    assert second["ok"] is True, second
+
+
+def test_read_log_clamps_negative_start(fake_lxd, fs):
+    from ceph_autobuild_resolver.lxd import ExecResult
+
+    # FakeLXD doesn't translate dd's ``if=PATH`` form, so stub dd and assert the
+    # clamp through the argv: a negative start must become skip=0 (never a
+    # negative skip, and never an inflated count).
+    _seed_file(fake_lxd, "../build-logs/build.log", "0123456789")
+    fake_lxd.exec_overrides["dd"] = lambda argv: ExecResult(0, "0123", "")
+    out = fs.read_log(log_path="/root/build-logs/build.log", start=-100, end=4)
+    assert "error" not in out
+    assert out["start"] == 0
+    dd_argv = next(argv for _c, argv in fake_lxd.exec_log if argv and argv[0] == "dd")
+    assert "skip=0" in dd_argv
+    assert "count=4" in dd_argv
+
+
+def test_read_log_surfaces_dd_failure(fake_lxd, fs):
+    from ceph_autobuild_resolver.lxd import ExecResult
+
+    _seed_file(fake_lxd, "../build-logs/build.log", "abcdef")
+    fake_lxd.exec_overrides["dd"] = lambda argv: ExecResult(1, "", "dd: read error")
+    out = fs.read_log(log_path="/root/build-logs/build.log", start=0, end=3)
+    assert out["error"] == "dd: read error"
+
+
+def _git_repo(fake_lxd, files: dict[str, str]) -> Path:
+    import subprocess
+
+    repo = Path(fake_lxd.root) / "root/ceph"
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "PATH": "/usr/bin:/bin"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env)
+    return repo
+
+
+def test_apply_patch_flags_control_version_change(fake_lxd, fs):
+    """A patch that relaxes a debian/control version constraint must surface the
+    same reviewer-attention flag the other mutating tools do."""
+    _git_repo(fake_lxd, {"debian/control": "Build-Depends: libfoo-dev (>= 2.0)\n"})
+    diff = (
+        "diff --git a/debian/control b/debian/control\n"
+        "--- a/debian/control\n"
+        "+++ b/debian/control\n"
+        "@@ -1 +1 @@\n"
+        "-Build-Depends: libfoo-dev (>= 2.0)\n"
+        "+Build-Depends: libfoo-dev (>= 1.0)\n"
+    )
+    out = fs.apply_patch(diff)
+    assert out["ok"] is True, out
+    assert out["flags"]["debian_control_version_change"] is True
+
+
+def test_apply_patch_flags_series_removal(fake_lxd, fs):
+    _git_repo(fake_lxd, {"debian/patches/series": "a.patch\nb.patch\n"})
+    diff = (
+        "diff --git a/debian/patches/series b/debian/patches/series\n"
+        "--- a/debian/patches/series\n"
+        "+++ b/debian/patches/series\n"
+        "@@ -1,2 +1 @@\n"
+        " a.patch\n"
+        "-b.patch\n"
+    )
+    out = fs.apply_patch(diff)
+    assert out["ok"] is True, out
+    assert out["flags"]["debian_patches_series_removal"] is True
+
+
+def test_apply_patch_returns_empty_flags_for_unflagged_change(fake_lxd, fs):
+    _git_repo(fake_lxd, {"debian/rules": "orig\n"})
+    diff = (
+        "diff --git a/debian/rules b/debian/rules\n"
+        "--- a/debian/rules\n"
+        "+++ b/debian/rules\n"
+        "@@ -1 +1 @@\n"
+        "-orig\n"
+        "+patched\n"
+    )
+    out = fs.apply_patch(diff)
+    assert out["ok"] is True, out
+    assert out["flags"] == {
+        "debian_control_version_change": False,
+        "debian_patches_series_removal": False,
+        "system_flag_disabled": False,
+    }
+
+
 def test_read_files_rejects_traversal_per_path(fake_lxd, fs):
     _seed_file(fake_lxd, "debian/control", "Source: ceph\n")
     out = fs.read_files(["../ccache/secret", "debian/control"])
