@@ -219,6 +219,14 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
             text=f"[BLOCKED: finish_reason={finish}]",
         ), _usage_from(response)
 
+    truncated = finish == "MAX_TOKENS"
+    if truncated:
+        # MAX_TOKENS is an "OK" finish reason (the model stopped cleanly) but the
+        # reply is cut off mid-response -- any prose or tool-call JSON may be
+        # incomplete. Mark it so the loop/transcript see the turn was truncated,
+        # mirroring the OpenRouter adapter's finish_reason=length handling.
+        log.warning("gemini reply truncated: finish_reason=MAX_TOKENS")
+
     parts = candidate.content.parts if candidate.content else []
     text_parts: list[str] = []
     thought_parts: list[str] = []
@@ -249,16 +257,26 @@ def _from_response(response: Any) -> tuple[Message, Usage]:
             elif part.text:
                 text_parts.append(part.text)
 
+    text = "\n".join(text_parts) or None
+    if truncated:
+        # Append the marker even when tool calls are present: a truncated batch
+        # may carry malformed/incomplete tool-call args, and the loop must have
+        # some signal the turn was cut short.
+        text = (
+            f"{text or ''}\n[TRUNCATED: finish_reason=MAX_TOKENS "
+            "— reply hit the output-token limit]"
+        ).strip()
+
     return Message(
         role=ROLE_MODEL,
-        text="\n".join(text_parts) or None,
+        text=text,
         reasoning="\n".join(thought_parts) or None,
         thought_signature=text_thought_sig,
         tool_calls=tool_calls,
     ), _usage_from(response)
 
 
-def _clean_schema(schema: dict[str, Any]) -> dict[str, Any]:
+def _clean_schema(schema: Any) -> Any:
     """Strip JSON Schema keys Gemini doesn't support.
 
     Gemini supports a subset of JSON Schema including ``anyOf`` (for union

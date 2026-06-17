@@ -105,6 +105,30 @@ def test_blocked_finish_reason_still_counts_usage():
     assert usage.input_tokens == 50
 
 
+def test_max_tokens_finish_reason_marks_truncated_text():
+    """MAX_TOKENS is an 'OK' finish reason but the reply is cut off; the text
+    must carry a [TRUNCATED] marker so the loop knows it may be incomplete."""
+    part = _NS(function_call=None, text="partial", thought=False, thought_signature=None)
+    cand = _NS(finish_reason=_NS(name="MAX_TOKENS"), content=_NS(parts=[part]))
+    resp = _NS(candidates=[cand], usage_metadata=_meta())
+    msg, _usage = _from_response(resp)
+    assert "partial" in msg.text
+    assert "[TRUNCATED" in msg.text
+    assert "MAX_TOKENS" in msg.text
+
+
+def test_max_tokens_marks_truncation_even_with_tool_calls():
+    """A truncated tool-call batch may carry incomplete args; the marker must be
+    appended even when the cut-off turn produced (only) function calls."""
+    fc = _NS(id=None, name="run_build", args={})
+    part = _NS(function_call=fc, text=None, thought=None, thought_signature=None)
+    cand = _NS(finish_reason=_NS(name="MAX_TOKENS"), content=_NS(parts=[part]))
+    resp = _NS(candidates=[cand], usage_metadata=_meta())
+    msg, _usage = _from_response(resp)
+    assert msg.tool_calls and msg.tool_calls[0].name == "run_build"
+    assert "[TRUNCATED" in (msg.text or "")
+
+
 def test_text_part_thought_signature_preserved():
     part = _NS(function_call=None, text="hello", thought=False, thought_signature=b"sig")
     cand = _NS(finish_reason=_NS(name="STOP"), content=_NS(parts=[part]))

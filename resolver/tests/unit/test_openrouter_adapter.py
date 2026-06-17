@@ -519,3 +519,32 @@ def test_finish_reason_length_marks_truncated_reply():
     reply, _usage = _adapter_with(handler).chat([Message(role="user", text="hi")])
     assert "partial answer" in reply.text
     assert "[TRUNCATED" in reply.text
+
+
+def test_finish_reason_length_marks_truncation_even_with_tool_calls():
+    """A length-truncated batch may carry an incomplete final tool call; the
+    [TRUNCATED] marker must be added even when tool_calls are present, so the
+    loop and transcript don't see it as a clean tool-call turn."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "finish_reason": "length",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "run_build", "arguments": "{}"},
+                        }],
+                    },
+                }],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 9},
+            },
+        )
+
+    reply, _usage = _adapter_with(handler).chat([Message(role="user", text="hi")])
+    assert reply.tool_calls and reply.tool_calls[0].name == "run_build"
+    assert "[TRUNCATED" in (reply.text or "")
