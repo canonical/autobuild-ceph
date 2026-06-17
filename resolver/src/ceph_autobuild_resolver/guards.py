@@ -56,10 +56,20 @@ def contained_relpath(path: str, workdir: str | None = None) -> str:
     """
     is_abs = path.startswith("/")
     p = normalize(path)
-    if ".." in p.split("/"):
+    components = p.split("/")
+    if ".." in components:
         raise EditScopeViolation(
             f"path {path!r} contains '..' — reads are restricted to the "
             "build workspace"
+        )
+    # Block the git metadata dir explicitly: --exclude-dir=.git stops grep
+    # *recursing* into it, but a direct path=".git/config" would still read
+    # the remote URL and any stored credentials. '..' is already rejected, so
+    # a bare ".git" component here is always the in-tree metadata directory.
+    if ".git" in components:
+        raise EditScopeViolation(
+            f"path {path!r} touches the .git metadata directory, which is "
+            "off-limits (it can hold remote URLs and credentials)"
         )
     if workdir:
         workdir_rel = normalize(workdir)

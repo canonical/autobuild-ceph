@@ -106,6 +106,19 @@ def test_contained_relpath_strips_workdir_prefix():
     assert guards.contained_relpath("debian/control", "/root/ceph") == "debian/control"
 
 
+def test_contained_relpath_rejects_dot_git():
+    """--exclude-dir=.git only stops recursion; a direct .git path must be
+    refused here so read tools can't pull the remote URL/credentials."""
+    for p in (".git", ".git/config", "/root/ceph/.git/config"):
+        with pytest.raises(guards.EditScopeViolation, match=".git"):
+            guards.contained_relpath(p, "/root/ceph")
+
+
+def test_contained_relpath_allows_gitignore():
+    # Only the exact ".git" component is blocked, not lookalikes.
+    assert guards.contained_relpath("debian/.gitignore", "/root/ceph") == "debian/.gitignore"
+
+
 def test_control_version_constraints_detects_lte_marker():
     old = "Depends: foo (<= 1.0)\n"
     new = "Depends: foo (<= 2.0)\n"
