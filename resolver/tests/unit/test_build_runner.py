@@ -119,6 +119,32 @@ def test_run_stage_allow_failure_continues(cfg):
     assert len(lxd.calls) == 2
 
 
+def test_run_stage_timeout_fails_even_with_allow_failure(cfg):
+    """A timed-out step is a hard failure regardless of allow_failure: a killed
+    step may have left the container half-modified, so the stage must abort
+    rather than report success from the remaining steps."""
+    lxd = _MinimalLXD(
+        step_results=[
+            ExecResult(124, "", "killed", timed_out=True),
+            ExecResult(0, "would-run\n", ""),
+        ]
+    )
+    runner = _runner(cfg, lxd)
+    stage = Stage(
+        name="test",
+        steps=[
+            Step(["optional"], allow_failure=True),
+            Step(["after"]),
+        ],
+    )
+    result = runner._run_stage(CONTAINER, stage)
+
+    assert not result.ok
+    assert result.returncode == 124
+    assert len(lxd.calls) == 1  # the step after the timeout never ran
+    assert "timed out" in result.stdout
+
+
 def test_run_stage_log_written_after_each_step(cfg):
     lxd = _MinimalLXD()
     runner = _runner(cfg, lxd)
