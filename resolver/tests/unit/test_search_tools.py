@@ -6,12 +6,21 @@ from pathlib import Path
 
 import pytest
 
+from ceph_autobuild_resolver import guards
 from ceph_autobuild_resolver.tools.schema import (
     HARD_MAX_MATCHES,
     MAX_EXCERPT_CHARS,
     MAX_FILES_LISTED,
 )
 from ceph_autobuild_resolver.tools.search import SearchHandlers
+
+
+def test_grep_rejects_explicit_dot_git_path(fake_lxd, search):
+    """--exclude-dir=.git stops recursion, but an explicit path='.git/config'
+    must be refused (the dispatcher turns this into a structured tool error)
+    so the model can't read remote creds out of git metadata."""
+    with pytest.raises(guards.EditScopeViolation, match=".git"):
+        search.grep("url", path=".git/config")
 
 
 @pytest.fixture
