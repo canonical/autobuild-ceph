@@ -82,6 +82,16 @@ def test_phase2_refresh_path_also_carries_env(cfg):
     assert result.refreshed == ["p1"]
 
 
+def test_unsafe_series_entries_are_skipped(cfg):
+    """A series entry with path traversal must never reach the phase-1
+    `patch --dry-run` redirect or _drop_patch's `rm`; the legitimate entry is
+    still walked."""
+    lxd = _RecordingLXD()
+    preflight.run(lxd, "ceph-build", cfg, "../../etc/passwd\ngood.patch\n")
+    assert not any("etc/passwd" in cmd for cmd, _ in lxd.calls)
+    assert any("good.patch" in cmd for cmd, _ in lxd.calls)
+
+
 def test_phase2_exec_calls_carry_a_timeout(cfg):
     """Every preflight container exec must pass a timeout: the quilt loop runs
     before the loop's wall-clock budget is armed, so an unguarded hung command
