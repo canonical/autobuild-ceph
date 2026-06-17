@@ -7,6 +7,7 @@ expressed as ``["bash", "-c", "..."]`` steps; everything else is a plain argv.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 
 from .config import Config
@@ -249,10 +250,13 @@ def _debuild_cmd(cfg: Config) -> str:
     # (zero cache stats). Use debuild's own knobs: --prepend-path puts the
     # ccache shims first so cmake's compiler detection picks /usr/lib/ccache/c++,
     # and --preserve-envvar passes the CCACHE_* settings through to the build.
+    # ccache_max_size is already format-validated in config.load(); shlex.quote
+    # here is belt-and-suspenders so this interpolation stays shell-safe even
+    # if the value ever reaches us unvalidated.
     return (
         f"CCACHE_DIR={CONTAINER_CCACHE_DIR} "
         f"CCACHE_BASEDIR={cfg.container_workdir} "
-        f"CCACHE_MAXSIZE={cfg.ccache_max_size} "
+        f"CCACHE_MAXSIZE={shlex.quote(cfg.ccache_max_size)} "
         f"debuild --prepend-path=/usr/lib/ccache "
         f"--preserve-envvar='CCACHE_*' "
         f"--no-lintian -us -uc -d -b -j$(nproc)"

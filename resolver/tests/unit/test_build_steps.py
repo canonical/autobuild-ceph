@@ -126,3 +126,15 @@ def test_debuild_cmd_ccache_max_size_is_configurable(_cfg):
         _cfg, ccache_host_dir="/var/cache/ccache/x", ccache_max_size="7G"
     )
     assert "CCACHE_MAXSIZE=7G" in _debuild_cmd(cfg)
+
+
+def test_debuild_cmd_quotes_ccache_max_size(_cfg):
+    """Defense in depth: even if an unvalidated value reached _debuild_cmd, the
+    interpolation must be shell-safe so it can't break out of the command."""
+    cfg = dataclasses.replace(
+        _cfg, ccache_host_dir="/var/cache/ccache/x", ccache_max_size="20G; touch pwned"
+    )
+    cmd = _debuild_cmd(cfg)
+    # The metacharacters must be neutralised (quoted), never appear bare.
+    assert "CCACHE_MAXSIZE=20G; touch pwned" not in cmd
+    assert "'20G; touch pwned'" in cmd
