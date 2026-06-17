@@ -182,9 +182,14 @@ def run(
         and exec_handlers.last_build.ok
         and not exec_handlers.files_changed_since_last_build
     ):
-        # The budget ran out (or the model stopped) one step short of
-        # declare_resolved, but the last build succeeded and nothing changed
-        # since — salvage the work. Validation still gates publishing.
+        # The loop stopped one step short of declare_resolved -- the budget ran
+        # out, OR the provider errored / overflowed context (stop_reason
+        # "provider_error" / "context_overflow"; only "declared_unresolvable" is
+        # excluded above). In every such case the last build still succeeded and
+        # nothing changed since, so the tree holds a fix the model verified with
+        # a real build; salvage it rather than discarding a multi-hour run on a
+        # last-second API hiccup. Validation (clean rebuild from pristine) still
+        # gates publishing, so a salvaged fix is never published unverified.
         log.info(
             "loop stopped (%s) without declare_resolved but the last build "
             "succeeded with no pending edits — proceeding to validation",
@@ -199,6 +204,10 @@ def run(
         preflight_note = pf.format_summary(pf_result)
         if preflight_note:
             summary += "\n\n" + preflight_note
+        # Distinct transcript marker so a reader (or downstream analysis) can
+        # tell a salvaged run apart from an explicit declare_resolved -- the
+        # rest of the publish path is identical.
+        transcript.outcome("loop_salvage", stop_reason=loop_result.stop_reason)
         return _validate_and_publish(
             lxd=lxd,
             runner=runner,
@@ -438,13 +447,26 @@ def _diff_stage_script(workdir: str) -> str:
 
 
 def _capture_diff(lxd: LXDManager, container: str, cfg: Config) -> str:
-    """Capture the model's accumulated changes as a unified diff against HEAD."""
+    """Capture the model's accumulated changes as a unified diff against HEAD.
+
+    The staging script ends in ``git diff --staged``, which exits 0 on success
+    regardless of whether there are changes; a non-zero exit therefore means the
+    capture itself failed (cd/git error, exec fault, timeout). Surface that as an
+    LXDError instead of returning an empty string, which the caller would
+    otherwise write as a blank diff and pass to validation -- making a mid-run
+    infra fault indistinguishable from "the model made no changes".
+    """
     result = lxd.exec_shell(
         container,
         _diff_stage_script(cfg.container_workdir),
         check=False,
         timeout=TOOL_EXEC_TIMEOUT_SECONDS,
     )
+    if not result.ok:
+        raise LXDError(
+            "diff capture failed "
+            f"(rc={result.returncode}): {result.stderr.strip() or 'no stderr'}"
+        )
     return result.stdout
 
 
