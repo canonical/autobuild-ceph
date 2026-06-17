@@ -7,6 +7,8 @@ compact — every token here is paid for on every subsequent turn.
 
 from __future__ import annotations
 
+import uuid
+
 from .build_runner import BuildOutcome, first_error_line
 from .config import Config
 from .providers.base import Message
@@ -137,6 +139,14 @@ def initial_user_message(
         else ""
     )
 
+    # Fence the (build-controlled) log tail with an unguessable per-call
+    # boundary. A fixed delimiter like "--- end of tail ---" can appear verbatim
+    # in a build log (a diff, a script echoing separators) and let crafted log
+    # content close the fence early and inject text that looks like first-party
+    # instructions. The model can't see this token ahead of time, so the log
+    # body can't reproduce it.
+    boundary = uuid.uuid4().hex
+
     # Direct the model to the right starting point based on what we know.
     has_fail_patch = "FAIL" in (patch_preflight or "")
     if has_fail_patch:
@@ -163,9 +173,9 @@ def initial_user_message(
         f"(use read_log to fetch ranges beyond the tail below).\n"
         f"{first_error_section}"
         f"\n"
-        f"--- last 500 lines of build output ---\n"
+        f"--- begin build output [{boundary}] ---\n"
         f"{initial_failure.log_tail}\n"
-        f"--- end of tail ---\n"
+        f"--- end build output [{boundary}] ---\n"
         f"\n"
         f"--- working tree (top-level) ---\n"
         f"{file_tree}\n"
