@@ -7,7 +7,8 @@ ever reaches into ``os.environ`` ad-hoc.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Literal
 
 ProviderName = Literal["openrouter", "gemini"]
@@ -33,7 +34,10 @@ class Config:
     # Provider selection
     provider: ProviderName
     model_name: str
-    api_key: str
+    # repr=False keeps the key out of the dataclass's auto-generated __repr__,
+    # so it never leaks into a debug print(cfg) or an unhandled-exception
+    # traceback that renders the Config.
+    api_key: str = field(repr=False)
 
     # Budget caps (per-failure)
     max_iterations: int
@@ -113,6 +117,22 @@ def load() -> Config:
             f"REASONING_EFFORT must be one of low/medium/high, got {effort!r}"
         )
     max_thinking = _env_int("REASONING_MAX_TOKENS", 0) or None
+    if max_thinking is not None and max_thinking < 0:
+        # `or None` only folds 0 away; a negative is truthy and would reach
+        # Gemini's ThinkingConfig(thinking_budget=-1), which 400s.
+        raise ConfigError(
+            f"REASONING_MAX_TOKENS must be a non-negative integer, got {max_thinking}"
+        )
+
+    # CCACHE_MAXSIZE is interpolated into the build's shell command line, so
+    # restrict it to a ccache size token (digits + optional unit) at load time
+    # rather than trusting an arbitrary env value to be shell-safe.
+    ccache_max_size = os.environ.get("CCACHE_MAXSIZE") or "20G"
+    if not re.fullmatch(r"[0-9]+[KkMmGgTtPp]?i?[Bb]?", ccache_max_size):
+        raise ConfigError(
+            f"CCACHE_MAXSIZE must be a ccache size string (e.g. '20G', '500M'), "
+            f"got {ccache_max_size!r}"
+        )
 
     return Config(
         provider=provider,  # type: ignore[arg-type]
@@ -130,5 +150,5 @@ def load() -> Config:
         reasoning_effort=effort,
         reasoning_max_tokens=max_thinking,
         ccache_host_dir=os.environ.get("CCACHE_HOST_DIR") or None,
-        ccache_max_size=os.environ.get("CCACHE_MAXSIZE") or "20G",
+        ccache_max_size=ccache_max_size,
     )
