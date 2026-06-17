@@ -52,6 +52,25 @@ def repo(tmp_path: Path) -> Path:
     return repo
 
 
+def test_capture_diff_raises_on_exec_failure(fake_lxd, cfg):
+    """A failed diff-capture exec must raise, not return '' -- otherwise a
+    mid-run infra fault writes a blank diff and looks like 'no changes'."""
+    from ceph_autobuild_resolver import orchestrator
+    from ceph_autobuild_resolver.lxd import ExecResult, LXDError
+
+    fake_lxd.exec_overrides["bash"] = lambda argv: ExecResult(3, "", "git exploded")
+    with pytest.raises(LXDError, match="diff capture failed"):
+        orchestrator._capture_diff(fake_lxd, "ceph-build", cfg)
+
+
+def test_capture_diff_returns_stdout_on_success(fake_lxd, cfg):
+    from ceph_autobuild_resolver import orchestrator
+    from ceph_autobuild_resolver.lxd import ExecResult
+
+    fake_lxd.exec_overrides["bash"] = lambda argv: ExecResult(0, "the diff", "")
+    assert orchestrator._capture_diff(fake_lxd, "ceph-build", cfg) == "the diff"
+
+
 def _run_stage_script(repo: Path) -> str:
     return subprocess.check_output(
         ["bash", "-c", _diff_stage_script(str(repo))], text=True
