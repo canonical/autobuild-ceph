@@ -334,7 +334,11 @@ class BuildRunner:
                     "and was killed ===\n"
                 )
             self._lxd.put_text(container, log_path, buf)
-            if not result.ok and not step.allow_failure:
+            # A timeout is a hard failure regardless of allow_failure: a killed
+            # step can leave the container half-modified, so continuing would
+            # silently corrupt later steps. allow_failure only covers an
+            # *expected* non-zero exit (e.g. "rm ... || true"), not a kill.
+            if result.timed_out or (not result.ok and not step.allow_failure):
                 return ExecResult(result.returncode, buf, result.stderr)
 
         return ExecResult(0, buf, "")
