@@ -80,7 +80,12 @@ jobs:
             lxd_image: ubuntu:24.04
             ubuntu_branch: ubuntu/noble
             debian_ref: origin/ubuntu/noble
-            ceph_version: 19.2.3
+            ceph_version: 19.2.4
+          - name: jammy
+            lxd_image: ubuntu:22.04
+            ubuntu_branch: ubuntu/jammy
+            debian_ref: origin/ubuntu/jammy
+            ceph_version: 19.2.4
 
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
