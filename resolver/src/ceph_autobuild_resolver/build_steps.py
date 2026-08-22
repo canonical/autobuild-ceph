@@ -172,11 +172,27 @@ def install_build_requirements_stage(cfg: Config) -> Stage:
             Step(["mkdir", "-p", cfg.container_log_dir]),
             Step(
                 [
-                    "sudo",
-                    "sed",
-                    "-i",
-                    "s/^Types: deb$/Types: deb deb-src/",
-                    "/etc/apt/sources.list.d/ubuntu.sources",
+                    "bash",
+                    "-c",
+                    # Enable deb-src so mk-build-deps can resolve build
+                    # dependencies. The location differs by release:
+                    #   - Noble (24.04+) uses the deb822 format in
+                    #     /etc/apt/sources.list.d/ubuntu.sources, where source
+                    #     repos are toggled via the "Types:" field.
+                    #   - Jammy (22.04) uses the one-line format in
+                    #     /etc/apt/sources.list, with deb-src lines commented
+                    #     out by default.
+                    "set -e; "
+                    "if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then "
+                    "  sudo sed -i 's/^Types: deb$/Types: deb deb-src/'"
+                    " /etc/apt/sources.list.d/ubuntu.sources; "
+                    "elif [ -f /etc/apt/sources.list ]; then "
+                    "  sudo sed -Ei 's/^# ?deb-src/deb-src/'"
+                    " /etc/apt/sources.list; "
+                    "else "
+                    "  echo 'no apt sources file found to enable deb-src' >&2;"
+                    " exit 1; "
+                    "fi",
                 ],
                 workdir=ceph_workdir,
             ),

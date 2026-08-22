@@ -80,7 +80,12 @@ jobs:
             lxd_image: ubuntu:24.04
             ubuntu_branch: ubuntu/noble
             debian_ref: origin/ubuntu/noble
-            ceph_version: 19.2.3
+            ceph_version: 19.2.4
+          - name: jammy
+            lxd_image: ubuntu:22.04
+            ubuntu_branch: ubuntu/jammy
+            debian_ref: origin/ubuntu/jammy
+            ceph_version: 19.2.4
 
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -122,11 +127,20 @@ jobs:
         run: sudo snap install astral-uv --classic
 
       - name: Install and initialize LXD
+        # btrfs gives copy-on-write snapshots and copies. With the default
+        # 'dir' backend every pristine snapshot, per-iteration restore and
+        # validation copy is a full duplicate of the Ceph tree, which fills
+        # the runner's root disk. Size the loop file to ~70% of free space so
+        # the runner itself keeps headroom.
         run: |
           sudo snap install lxd
-          sudo lxd init --auto
+          df -h /
+          free_gib=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          sudo lxd init --auto --storage-backend btrfs \
+            --storage-create-loop "$((free_gib * 70 / 100))"
           sudo iptables -P FORWARD ACCEPT
           sudo usermod -aG lxd "$USER"
+          sudo lxc storage info default
 
       - name: Prepare ccache directory
         run: sudo install -d -m 1777 "$CCACHE_HOST_DIR"
@@ -136,6 +150,12 @@ jobs:
         # connect to the LXD unix socket without sudo.
         run: |
           sg lxd -c "bash run-resolver.sh --prep-image ${{ matrix.lxd_image }}"
+
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h /
+          sg lxd -c "lxc storage info default" || true
 
       - name: ccache stats
         if: always()
